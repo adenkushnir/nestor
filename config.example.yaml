@@ -1,0 +1,15 @@
+# Nestor settings. Copy this file to config.yaml and change what you need; config.yaml stays out of git.
+# Speaker name as shown in the Google Home app (see: python -m nestor --list-speakers). Empty = the only speaker found.
+speaker_name: ""
+# Optional: the speaker's IP address, for when network discovery doesn't find it
+speaker_host: ""
+# Edge neural voice. See all voices with: .venv/Scripts/edge-tts --list-voices
+voice: "en-US-EmmaMultilingualNeural"
+# Speaking speed, e.g. "+10%" or "-5%"
+voice_rate: "+0%"
+# Volume for announcements, 0.0 to 1.0 (the previous volume is restored afterwards)
+announce_volume: 0.5
+# Play a short chime before each announcement
+chime: true
+# Port of Nestor's web server (the speaker fetches its audio from here)
+port: 8765
