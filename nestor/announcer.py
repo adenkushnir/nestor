@@ -1,15 +1,36 @@
-# Queues messages and speaks them one batch at a time: chime, speech, then the speaker goes back to how it was
+# Queues messages and speaks them one batch at a time: chime, speech, then the speaker goes back to how it was.
+# Alerts that arrive during quiet hours are saved and played once quiet hours end.
+import json
 import logging
+import os
 import queue
 import threading
+import time
 from nestor import chime
 from nestor import tts
+from nestor.config import DATA_DIR
+from nestor.quiet import QuietHours
 MAX_TEXT_LENGTH = 1000
+HELD_PATH = os.path.join(DATA_DIR, "held_alerts.json")
 log = logging.getLogger(__name__)
+
+# Read the alerts held during quiet hours (saved to disk, so a restart overnight doesn't lose them)
+def read_held():
+    # No file means nothing is held
+    if not os.path.exists(HELD_PATH):
+        return []
+    with open(HELD_PATH, encoding="utf-8") as held_file:
+        return json.load(held_file)
+
+# Save the list of held alerts
+def write_held(held_alerts):
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(HELD_PATH, "w", encoding="utf-8") as held_file:
+        json.dump(held_alerts, held_file, indent=1)
 
 # Speaks messages on the speaker in the order they arrive, never two at once
 class Announcer:
-    # Start the background worker that plays queued messages
+    # Start the worker that plays queued messages, and the one that releases held alerts in the morning
     def __init__(self, speaker, settings, base_url):
         self.speaker = speaker
         self.base_url = base_url
@@ -17,16 +38,51 @@ class Announcer:
         self.voice_rate = settings.get("voice_rate", "+0%")
         self.announce_volume = float(settings.get("announce_volume", 0.5))
         self.chime_file = chime.ensure_chime() if settings.get("chime", True) else None
+        self.quiet_hours = QuietHours(settings.get("quiet_hours", ""))
+        self.held_lock = threading.Lock()
         self.jobs = queue.Queue()
-        self.worker = threading.Thread(target=self.run, name="announcer", daemon=True)
-        self.worker.start()
+        threading.Thread(target=self.run, name="announcer", daemon=True).start()
+        threading.Thread(target=self.release_held, name="quiet-hours", daemon=True).start()
 
-    # Queue a message and return an event that is set once it has been spoken (or has failed)
-    def say(self, text):
-        text = text.strip()[:MAX_TEXT_LENGTH]
+    # Queue one message, or a list to play together, and return an event set once spoken (or failed)
+    def say(self, texts):
+        # A single message is a list of one
+        if isinstance(texts, str):
+            texts = [texts]
+        texts = [text.strip()[:MAX_TEXT_LENGTH] for text in texts if text.strip()]
         done = threading.Event()
-        self.jobs.put((text, done))
+        self.jobs.put((texts, done))
         return done
+
+    # Speak an alert now, or hold it during quiet hours; returns True if it was held
+    def alert(self, text):
+        # At night the alert is saved for the morning instead of spoken
+        if self.quiet_hours.is_quiet():
+            with self.held_lock:
+                write_held(read_held() + [text.strip()[:MAX_TEXT_LENGTH]])
+            log.info("Holding until quiet hours end: %s", text)
+            return True
+        self.say(text)
+        return False
+
+    # Background loop: once quiet hours are over, play any alerts that were held
+    def release_held(self):
+        # Check every 30 seconds for the life of the program
+        while True:
+            # Held alerts wait until quiet hours are over
+            if not self.quiet_hours.is_quiet():
+                with self.held_lock:
+                    held_alerts = read_held()
+
+                    # Empty the saved list now that they are about to play
+                    if held_alerts:
+                        write_held([])
+
+                # Introduce the held alerts, then play them all as one batch
+                if held_alerts:
+                    count_words = "one message" if len(held_alerts) == 1 else f"{len(held_alerts)} messages"
+                    self.say([f"While you were asleep, {count_words} came in."] + held_alerts)
+            time.sleep(30)
 
     # Worker loop: wait for messages, and play everything that is waiting as one batch
     def run(self):
@@ -40,16 +96,19 @@ class Announcer:
 
             # A failed batch is logged and the worker carries on with the next one
             try:
-                self.announce([text for text, done in batch])
+                self.announce([text for texts, done in batch for text in texts])
             except Exception as error:
                 log.error("Announcement failed: %s", error)
             finally:
                 # Tell everyone waiting on these messages that they are finished
-                for text, done in batch:
+                for texts, done in batch:
                     done.set()
 
     # Speak a list of messages: make the audio first, then chime, speak each, and restore the speaker
     def announce(self, texts):
+        # An empty batch has nothing to say
+        if not texts:
+            return
         speech_files = [tts.make_speech(text, self.voice, self.voice_rate) for text in texts]
         saved = self.speaker.snapshot()
 

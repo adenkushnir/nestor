@@ -17,7 +17,7 @@ def main():
     if args.list_speakers:
         list_speakers()
         return
-    service = Service(load_config())
+    service = Service(load_config(), watchers=True)
     print("Nestor is running. Press Ctrl+C to stop.")
 
     # Keep the main thread alive until Ctrl+C

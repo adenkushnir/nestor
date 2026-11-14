@@ -13,3 +13,13 @@ announce_volume: 0.5
 chime: true
 # Port of Nestor's web server (the speaker fetches its audio from here)
 port: 8765
+# Alerts (tell.py, the Claude Code hook, GitHub) that arrive in these hours are held until they end. Empty = never.
+# Messages from speak.py always play straight away.
+quiet_hours: "22:00-08:00"
+# Announce GitHub news on your repos: CI failures and recoveries, new stars, issues and PRs from others
+github_watch: true
+github_poll_minutes: 5
+# The Claude Code hook speaks only when a reply took at least this many minutes
+claude_min_minutes: 1
+# How to say folder, repo and branch names out loud, e.g. "red-piste": "Red Piste"
+spoken_names: {}
