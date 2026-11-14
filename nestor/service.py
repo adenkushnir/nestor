@@ -1,10 +1,11 @@
-# Wires the speaker, announcer and web server together into one running Nestor service
+# Wires the speaker, announcer, web server and watchers together into one running Nestor service
 import logging
 import socket
 import threading
 from werkzeug.serving import make_server
 from nestor import tts
 from nestor.announcer import Announcer
+from nestor.github_watch import GitHubWatcher
 from nestor.server import create_app
 from nestor.speaker import Speaker
 log = logging.getLogger(__name__)
@@ -15,10 +16,10 @@ def lan_ip_towards(host):
         probe.connect((host, 8009))  # UDP connect sends nothing; it just picks the right network
         return probe.getsockname()[0]
 
-# The running service: connected speaker, announcer, and web server in a background thread
+# The running service: connected speaker, announcer, web server in a background thread, and optional watchers
 class Service:
-    # Connect to the speaker and start the web server
-    def __init__(self, settings):
+    # Connect to the speaker and start the web server; watchers only run in the full service, not for speak.py
+    def __init__(self, settings, watchers=False):
         tts.clean_cache()
         self.speaker = Speaker(settings.get("speaker_name"), settings.get("speaker_host"))
         port = int(settings.get("port", 8765))
@@ -28,6 +29,10 @@ class Service:
         self.web_thread = threading.Thread(target=self.web_server.serve_forever, name="web", daemon=True)
         self.web_thread.start()
         log.info("Web server on %s", base_url)
+
+        # GitHub alerts can be turned off in config.yaml
+        if watchers and settings.get("github_watch", True):
+            GitHubWatcher(self.announcer, settings)
 
     # Stop the web server and disconnect from the speaker
     def stop(self):

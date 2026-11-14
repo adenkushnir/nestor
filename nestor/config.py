@@ -5,6 +5,7 @@ PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_PATH = os.path.join(PROJECT_DIR, "config.yaml")
 EXAMPLE_PATH = os.path.join(PROJECT_DIR, "config.example.yaml")
 CACHE_DIR = os.path.join(PROJECT_DIR, "cache")
+DATA_DIR = os.path.join(PROJECT_DIR, "data")  # State that should survive a restart, e.g. alerts held overnight
 
 # Read one YAML file into a dict (empty if the file is missing or blank)
 def read_yaml(path):

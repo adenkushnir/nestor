@@ -60,6 +60,63 @@ reach this API.
 Nestor plays a chime, speaks at `announce_volume`, then puts the volume back. Audio that was playing in the speaker's
 built-in media player resumes. Music from apps like Spotify stops and has to be restarted by hand.
 
+## Alerts
+
+Alerts are announcements from your computer. Unlike `speak.py`, they respect **quiet hours** (`quiet_hours` in
+`config.yaml`, 22:00–08:00 by default). Alerts that arrive at night are saved and played when quiet hours end, starting
+with "While you were asleep, 3 messages came in."
+
+Any program can send one:
+
+```bash
+curl -X POST http://localhost:8765/alert -H "Content-Type: application/json" -d '{"text": "Backup finished"}'
+```
+
+### Long commands: tell.py
+
+`tell.py` runs a command, then says whether it worked and how long it took ("Train finished after 12 minutes", or
+"Build failed after 40 seconds, with exit code 1"):
+
+```bash
+.venv/Scripts/python tell.py python train.py --epochs 50
+.venv/Scripts/python tell.py --name "The export" ./export.sh
+```
+
+To use it from any folder as just `tell`, add this line to `~/.bashrc` (Git Bash):
+
+```bash
+alias tell='"/c/Vibes/Google Home/.venv/Scripts/python" "/c/Vibes/Google Home/tell.py"'
+```
+
+### Claude Code
+
+`hooks/claude_code.py` makes the speaker say "Claude finished in Red Piste after 4 minutes" when a Claude Code reply took
+longer than `claude_min_minutes` (1 by default). Shorter replies stay silent. Add it to `~/.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "\"C:/Vibes/Google Home/.venv/Scripts/python.exe\" \"C:/Vibes/Google Home/hooks/claude_code.py\""}]}],
+    "Stop": [{"hooks": [{"type": "command", "command": "\"C:/Vibes/Google Home/.venv/Scripts/python.exe\" \"C:/Vibes/Google Home/hooks/claude_code.py\""}]}]
+  }
+}
+```
+
+The hook prints nothing and always succeeds, so it never gets in Claude Code's way, even when Nestor isn't running.
+
+### GitHub
+
+While `python -m nestor` runs, it checks your GitHub repos every 5 minutes and announces:
+
+- a CI check that fails ("The Android check failed on Datebook"), and when it passes again;
+- new stars;
+- new issues and pull requests opened by other people (not you, and not bots).
+
+It uses the GitHub CLI's login (`gh auth login`), so Nestor stores no token. The first check after setup only records
+what is already there. Turn it off with `github_watch: false`.
+
+`spoken_names` in `config.yaml` sets how folder, repo and branch names are said, e.g. `"red-piste": "Red Piste"`.
+
 ## Status
 
-Work in progress: milestone 1 (speaking) is done; the other features are on the way.
+Milestones 1 (speaking) and 2 (alerts) are done; the other features are on the way.
