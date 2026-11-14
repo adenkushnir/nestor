@@ -95,8 +95,9 @@ class Speaker:
         elif saved["app_id"] and saved["app_id"] != DEFAULT_MEDIA_RECEIVER and saved["app_name"] != "Backdrop":
             log.info("%s was playing and can't be resumed automatically", saved["app_name"])
 
-    # Play one audio URL and block until it has finished (or a timeout passes)
-    def play_and_wait(self, url, content_type, max_seconds=180):
+    # Play one audio URL and block until it has finished (or a timeout passes). expected_seconds is for clips the
+    # speaker never reports as finished (Google Home Speaker hangs ~30 s after WAV files): done once that long played.
+    def play_and_wait(self, url, content_type, expected_seconds=None, max_seconds=180):
         # A unique query string means the status for this play can't be mixed up with an earlier one
         self.play_counter += 1
         unique_url = f"{url}?play={int(time.time())}-{self.play_counter}"
@@ -105,25 +106,27 @@ class Speaker:
         media.block_until_active(timeout=15)
         start_deadline = time.time() + 15
         end_deadline = time.time() + max_seconds
-        started = False
+        playing_since = None
 
         # Poll the player: wait for this URL to start, then for it to finish
         while time.time() < end_deadline:
             media_status = media.status
             is_this_media = media_status.content_id == unique_url
+            player_state = media_status.player_state
 
             # Note when playback begins, and stop waiting once it is over
-            if is_this_media and media_status.player_state in ACTIVE_STATES:
-                started = True
-            elif is_this_media and media_status.player_state == MEDIA_PLAYER_STATE_IDLE and (
-                    media_status.idle_reason == "ERROR"):
+            if is_this_media and player_state in ACTIVE_STATES and playing_since is None:
+                playing_since = time.time()
+            elif is_this_media and player_state == MEDIA_PLAYER_STATE_IDLE and media_status.idle_reason == "ERROR":
                 raise RuntimeError(f"Speaker could not play {url}")
-            elif is_this_media and media_status.player_state == MEDIA_PLAYER_STATE_IDLE and (
-                    started or media_status.idle_reason == "FINISHED"):
+            elif is_this_media and player_state == MEDIA_PLAYER_STATE_IDLE and (
+                    playing_since or media_status.idle_reason == "FINISHED"):
                 return
-            elif not started and time.time() > start_deadline:
+            elif playing_since and expected_seconds and time.time() - playing_since > expected_seconds + 0.3:
+                return
+            elif not playing_since and time.time() > start_deadline:
                 raise RuntimeError(f"Speaker did not start playing {url}")
-            time.sleep(0.2)
+            time.sleep(0.1)
         log.warning("Gave up waiting for %s to finish", url)
 
     # Close the connection to the speaker and stop network discovery

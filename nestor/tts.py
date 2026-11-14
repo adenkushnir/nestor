@@ -18,11 +18,28 @@ def make_speech(text, voice, rate):
     if os.path.exists(file_path):
         os.utime(file_path)  # Mark as recently used so the cleanup keeps it
     else:
-        partial_path = file_path + ".part"
-        communicate = edge_tts.Communicate(text, voice, rate=rate)
-        asyncio.run(communicate.save(partial_path))
-        os.replace(partial_path, file_path)  # Only a complete file gets the real name
+        download_speech(text, voice, rate, file_path)
     return file_name
+
+# Ask the TTS service for the speech, trying twice because it occasionally returns no audio
+def download_speech(text, voice, rate, file_path):
+    partial_path = file_path + ".part"
+
+    # First try, then one retry; the second failure is passed on
+    for attempt in range(2):
+        # A failed attempt removes its half-written file
+        try:
+            asyncio.run(edge_tts.Communicate(text, voice, rate=rate).save(partial_path))
+            os.replace(partial_path, file_path)  # Only a complete file gets the real name
+            return
+        except Exception:
+            # Remove the half-written file
+            if os.path.exists(partial_path):
+                os.remove(partial_path)
+
+            # Give up after the second try
+            if attempt == 1:
+                raise
 
 # Delete cached speech files older than a day so the cache folder doesn't grow forever
 def clean_cache():

@@ -59,7 +59,8 @@ class Announcer:
 
             # The chime is optional in config.yaml
             if self.chime_file:
-                self.speaker.play_and_wait(self.media_url(self.chime_file), "audio/wav")
+                self.speaker.play_and_wait(self.media_url(self.chime_file), "audio/wav",
+                                           expected_seconds=chime.CHIME_SECONDS)
 
             # Speak each message in turn
             for text, speech_file in zip(texts, speech_files):

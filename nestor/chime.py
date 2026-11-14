@@ -6,6 +6,7 @@ import wave
 from nestor.config import CACHE_DIR
 CHIME_FILE = "chime.wav"
 SAMPLE_RATE = 44100
+CHIME_SECONDS = 0.65  # Length of the two notes below
 
 # Write the chime WAV into the cache folder if it isn't there yet, and return its file name
 def ensure_chime():
