@@ -1,0 +1,19 @@
+# Personal settings and data (only the *.example.* versions are committed)
+config.yaml
+reminders.yaml
+memory.json
+# Google Calendar OAuth secrets
+google_credentials.json
+google_token.json
+# API keys
+.env
+# Porcupine wake word models are licensed to your Picovoice account
+*.ppn
+# Generated audio and logs
+cache/
+*.log
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
