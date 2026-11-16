@@ -44,7 +44,8 @@ def find_cast(speaker_name, speaker_host):
         return casts[0], browser
     elif not casts:
         browser.stop_discovery()
-        raise RuntimeError(f"Speaker {speaker_name!r} not found. Run: python -m nestor --list-speakers")
+        raise RuntimeError(f"Speaker {speaker_name!r} not found. Is this PC on the same Wi-Fi as the speaker? "
+                           "To see the speakers it can find, run: python -m nestor --list-speakers")
     else:
         browser.stop_discovery()
         names = ", ".join(cast.name for cast in casts)

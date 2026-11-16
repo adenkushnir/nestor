@@ -1,6 +1,5 @@
 # Queues messages and speaks them one batch at a time: chime, speech, then the speaker goes back to how it was.
 # Alerts that arrive during quiet hours are saved and played once quiet hours end.
-import json
 import logging
 import os
 import queue
@@ -10,23 +9,30 @@ from nestor import chime
 from nestor import tts
 from nestor.config import DATA_DIR
 from nestor.quiet import QuietHours
+from nestor.storage import read_json
+from nestor.storage import write_json
 MAX_TEXT_LENGTH = 1000
 HELD_PATH = os.path.join(DATA_DIR, "held_alerts.json")
+HISTORY_PATH = os.path.join(DATA_DIR, "alert_history.json")
+HISTORY_KEPT = 200
 log = logging.getLogger(__name__)
+
+# Read the recent alerts, oldest first: dicts with time, text, source and held (for the briefing and the wall display)
+def read_history():
+    return read_json(HISTORY_PATH, [])
+
+# Add one alert to the history, keeping only the most recent ones
+def add_to_history(text, source, held):
+    entry = {"time": time.strftime("%Y-%m-%dT%H:%M:%S"), "text": text, "source": source, "held": held}
+    write_json(HISTORY_PATH, (read_history() + [entry])[-HISTORY_KEPT:])
 
 # Read the alerts held during quiet hours (saved to disk, so a restart overnight doesn't lose them)
 def read_held():
-    # No file means nothing is held
-    if not os.path.exists(HELD_PATH):
-        return []
-    with open(HELD_PATH, encoding="utf-8") as held_file:
-        return json.load(held_file)
+    return read_json(HELD_PATH, [])
 
 # Save the list of held alerts
 def write_held(held_alerts):
-    os.makedirs(DATA_DIR, exist_ok=True)
-    with open(HELD_PATH, "w", encoding="utf-8") as held_file:
-        json.dump(held_alerts, held_file, indent=1)
+    write_json(HELD_PATH, held_alerts)
 
 # Speaks messages on the speaker in the order they arrive, never two at once
 class Announcer:
@@ -54,16 +60,23 @@ class Announcer:
         self.jobs.put((texts, done))
         return done
 
-    # Speak an alert now, or hold it during quiet hours; returns True if it was held
-    def alert(self, text):
-        # At night the alert is saved for the morning instead of spoken
-        if self.quiet_hours.is_quiet():
-            with self.held_lock:
-                write_held(read_held() + [text.strip()[:MAX_TEXT_LENGTH]])
-            log.info("Holding until quiet hours end: %s", text)
-            return True
-        self.say(text)
-        return False
+    # Speak an alert now, or hold it during quiet hours; source says where it came from ("github", "reminder", ...).
+    # Returns True if it was held.
+    def alert(self, text, source="other"):
+        text = text.strip()[:MAX_TEXT_LENGTH]
+        held = self.quiet_hours.is_quiet()
+
+        # Every alert goes in the history; at night it is also saved for the morning instead of spoken
+        with self.held_lock:
+            add_to_history(text, source, held)
+
+            # Hold it, or speak it now
+            if held:
+                write_held(read_held() + [text])
+                log.info("Holding until quiet hours end: %s", text)
+            else:
+                self.say(text)
+        return held
 
     # Background loop: once quiet hours are over, play any alerts that were held
     def release_held(self):

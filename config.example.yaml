@@ -23,3 +23,9 @@ github_poll_minutes: 5
 claude_min_minutes: 1
 # How to say folder, repo and branch names out loud, e.g. "red-piste": "Red Piste"
 spoken_names: {}
+# Home for the briefing's weather and sun times: "Town, ST" (e.g. "Princeton, NJ"), a ZIP code, or "lat,lon"
+home_location: ""
+# "fahrenheit" or "celsius"
+temperature_unit: "fahrenheit"
+# Reminders are spoken this many minutes ahead, and again at their time
+reminder_heads_up_minutes: 15

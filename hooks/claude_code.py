@@ -63,8 +63,8 @@ def handle(event):
         # Quick replies you were watching don't need an announcement
         if elapsed is not None and elapsed >= min_seconds:
             project = spoken_project(event.get("cwd") or os.getcwd(), settings)
-            post_to_nestor("/alert", {"text": f"Claude finished in {project} after {spoken_duration(elapsed)}."},
-                           timeout=3)
+            message = f"Claude finished in {project} after {spoken_duration(elapsed)}."
+            post_to_nestor("/alert", {"text": message, "source": "claude"}, timeout=3)
 
 # Read the event from standard input and handle it, swallowing every error
 def main():

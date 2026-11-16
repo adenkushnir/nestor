@@ -10,6 +10,8 @@ import time
 import urllib.request
 from nestor.config import DATA_DIR
 from nestor.spoken import spoken_name
+from nestor.storage import read_json
+from nestor.storage import write_json
 API_URL = "https://api.github.com"
 STATE_PATH = os.path.join(DATA_DIR, "github_state.json")
 FAILED_CONCLUSIONS = {"failure", "timed_out", "startup_failure"}
@@ -27,19 +29,13 @@ def gh_token():
     token = result.stdout.strip()
     return token if result.returncode == 0 and token else None
 
-# Load what was seen last time (stars, CI results, issues), or an empty state
+# Load what was seen last time (stars, CI results, issues), or an empty state on the first run
 def read_state():
-    # First run: nothing seen yet
-    if not os.path.exists(STATE_PATH):
-        return {"stars": {}, "ci": {}, "issues": {}}
-    with open(STATE_PATH, encoding="utf-8") as state_file:
-        return json.load(state_file)
+    return read_json(STATE_PATH, {"stars": {}, "ci": {}, "issues": {}})
 
 # Save what has been seen, so a restart doesn't announce old news
 def write_state(state):
-    os.makedirs(DATA_DIR, exist_ok=True)
-    with open(STATE_PATH, "w", encoding="utf-8") as state_file:
-        json.dump(state, state_file, indent=1)
+    write_json(STATE_PATH, state)
 
 # Current time in GitHub's timestamp format
 def utc_now_text():
@@ -93,7 +89,7 @@ class GitHubWatcher:
         # Each change becomes an alert (held overnight during quiet hours)
         for message in messages:
             log.info("GitHub: %s", message)
-            self.announcer.alert(message)
+            self.announcer.alert(message, source="github")
 
     # Announce repos whose star count went up
     def check_stars(self, repos):

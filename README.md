@@ -117,6 +117,66 @@ what is already there. Turn it off with `github_watch: false`.
 
 `spoken_names` in `config.yaml` sets how folder, repo and branch names are said, e.g. `"red-piste": "Red Piste"`.
 
+## Reminders
+
+Each reminder is spoken twice: a heads-up 15 minutes before ("In 15 minutes: call mum.") and again at its time
+("Reminder: call mum."). Reminders are alerts, so during quiet hours they are held until morning; `remind` warns you
+when that will happen. Nestor must be running at the time for a reminder to be spoken.
+
+One-off reminders, with the time at the start or the end:
+
+```bash
+.venv/Scripts/python remind.py 18:00 call mum
+.venv/Scripts/python remind.py tomorrow 9:30 dentist
+.venv/Scripts/python remind.py take the pizza out in 20m
+.venv/Scripts/python remind.py fri 7pm dinner with Sam
+.venv/Scripts/python remind.py 12/3 2pm haircut
+```
+
+Repeating reminders go in `reminders.yaml` (copy `reminders.example.yaml`). Nestor rereads it on every check, so edits
+work without a restart:
+
+```yaml
+- text: Fencing training
+  days: [tue, thu]     # or daily, weekdays, weekends, sun
+  time: "18:00"
+```
+
+## Briefing
+
+```bash
+.venv/Scripts/python briefing.py          # speak it now
+.venv/Scripts/python briefing.py --show   # just print it
+.venv/Scripts/python briefing.py --json   # the data behind it
+```
+
+The briefing gives the date, the weather (Open-Meteo, free, no key), sunrise and sunset, today's reminders, and GitHub
+news from overnight. Set `home_location` in `config.yaml` to `"Town, ST"`, a ZIP code or `"lat,lon"` for the weather.
+
+To use `remind` and `briefing` from any folder, add these to `~/.bashrc`:
+
+```bash
+alias remind='"/c/Vibes/Google Home/.venv/Scripts/python" "/c/Vibes/Google Home/remind.py"'
+alias briefing='"/c/Vibes/Google Home/.venv/Scripts/python" "/c/Vibes/Google Home/briefing.py"'
+```
+
+## API
+
+Nestor's web server (port 8765, home network only) is also how the phone page, Datebook and the wall display talk to
+it. Everything is JSON.
+
+| Request | What it does |
+|---|---|
+| `POST /speak` `{"text", "wait"}` | Speak straight away |
+| `POST /alert` `{"text", "source"}` | Speak an alert (held during quiet hours) |
+| `GET /alerts?limit=20` | Recent alerts, newest first |
+| `GET /reminders` | One-off, repeating and today's reminders |
+| `POST /reminders` `{"text", "at"}` or `{"text", "when": "tomorrow 6pm"}` | Add a one-off reminder |
+| `DELETE /reminders/<id>` | Delete a one-off reminder |
+| `GET /briefing` | The briefing as data and text |
+| `POST /briefing` `{"wait"}` | Speak the briefing |
+| `GET /health` | Is Nestor running, and which speaker |
+
 ## Status
 
-Milestones 1 (speaking) and 2 (alerts) are done; the other features are on the way.
+Milestones 1 (speaking), 2 (alerts) and 3 (reminders and briefing) are done; the other features are on the way.
