@@ -194,7 +194,8 @@ end. You'll hear these sounds:
 Timers, alarms, music and lights are coming in later milestones.
 
 **How it works:**
-- **Wake word:** [Porcupine](https://picovoice.ai) hears "Hey John" on the PC's microphone.
+- **Wake word:** [openWakeWord](https://github.com/dscripka/openWakeWord) (open source, no account) hears "Hey
+  John" on the PC's microphone.
 - **Speech to text:** [faster-whisper](https://github.com/SYSTRAN/faster-whisper) turns what you say into text, on
   the PC.
 - **The answer:** Claude (Opus 5.5 at low effort) answers, using Nestor's tools.
@@ -206,16 +207,16 @@ looks up for the answer.
 
 1. **A Claude API key just for Nestor:** in the [Anthropic Console](https://platform.claude.com), create a new API key
    (name it "Nestor") and set a monthly spend limit if you like.
-2. **A Picovoice account** (free for personal use) at [console.picovoice.ai](https://console.picovoice.ai):
-   - Copy your **AccessKey**.
-   - Under **Porcupine**, type the wake phrase `Hey John`, choose **Windows**, and download the model.
-   - Unzip it and save the `.ppn` file in the project folder as `hey-john.ppn`.
-3. Create a file called `.env` in the project folder (git never sees it) with your two keys:
+2. Create a file called `.env` in the project folder (git never sees it) with the key:
 
    ```
    ANTHROPIC_API_KEY=sk-ant-...
-   PICOVOICE_ACCESS_KEY=...
    ```
+
+3. **Train the "Hey John" wake word** (free, about an hour, mostly waiting) with openWakeWord's
+   [training notebook](https://colab.research.google.com/drive/1q1oe2zOyZp7UsB3jJiQ1IFn8z5YfjwEb?usp=sharing) on
+   Google Colab. Enter `hey john` as the wake word, run it, and download the `.onnx` model. Save it in the project
+   folder as `hey_john.onnx`. **Until then, John answers to "Hey Jarvis"**, openWakeWord's built-in model.
 
 4. In `config.yaml`, set `john_owner_name` to your name. Once a USB microphone is plugged in, set `microphone` to part
    of its name; `python -m nestor` logs which microphone John is using.
@@ -226,7 +227,7 @@ John's settings in `config.yaml`:
 
 | Setting | What it does |
 |---|---|
-| `john_sensitivity` | 0.0 to 1.0: higher hears "Hey John" more easily, but also wakes up by mistake more often |
+| `john_wake_threshold` | 0.0 to 1.0: lower hears "Hey John" more easily, but also wakes up by mistake more often |
 | `whisper_model` | `small.en` (more accurate) or `base.en` (faster) |
 | `john_model`, `john_effort` | The Claude model and effort |
 | `john_follow_up_seconds` | How long he listens for a follow-up |

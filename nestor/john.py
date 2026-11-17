@@ -1,18 +1,21 @@
-# Hey John: listens on the microphone for "Hey John", records until you stop talking, turns it into text on this
-# computer (faster-whisper), asks the brain, and speaks the answer, then listens a few seconds for a follow-up
+# Hey John: listens on the microphone for "Hey John" (openWakeWord), records until you stop talking, turns it into text
+# on this computer (faster-whisper), asks the brain, and speaks the answer, then listens a few seconds for a follow-up
 import logging
 import math
 import os
 import threading
 import time
 import numpy
-import pvporcupine
+import openwakeword.utils
 import pvrecorder
 from faster_whisper import WhisperModel
+from openwakeword.model import Model as WakeWordModel
 from nestor.brain import Brain
 from nestor.config import PROJECT_DIR
 from nestor.sounds import play_sound
-SAMPLE_RATE = 16000  # Porcupine and Whisper both work at 16 kHz
+SAMPLE_RATE = 16000  # openWakeWord and Whisper both work at 16 kHz
+FRAME_LENGTH = 1280  # 80 ms of audio, the step openWakeWord works in
+FALLBACK_WAKE_WORD = "hey_jarvis"  # openWakeWord's built-in model, used until the "Hey John" model is trained
 MIN_SPEECH_LEVEL = 350  # Loudness (RMS) below this never counts as speech
 SPEECH_OVER_NOISE = 2.5  # Speech must be this many times louder than the room's background
 SILENCE_SECONDS = 0.9  # This much quiet after speaking ends the recording
@@ -43,17 +46,20 @@ def find_microphone(setting):
         log.warning("No microphone matches %r; using the default. Microphones: %s", setting, ", ".join(names))
     return -1
 
-# What's missing before John can run (keys, the wake word file), as a list of problems; empty when ready
+# What's missing before John can run, as a list of problems; empty when ready
 def missing_setup(settings, secrets):
-    needs = [(bool(secrets.get("ANTHROPIC_API_KEY")), "ANTHROPIC_API_KEY in .env (Nestor's own Claude key)"),
-             (bool(secrets.get("PICOVOICE_ACCESS_KEY")), "PICOVOICE_ACCESS_KEY in .env"),
-             (os.path.exists(wake_word_path(settings)),
-              f"the wake word file {settings.get('john_wake_word', 'hey-john.ppn')} in the project folder")]
+    needs = [(bool(secrets.get("ANTHROPIC_API_KEY")), "ANTHROPIC_API_KEY in .env (Nestor's own Claude key)")]
     return [problem for ready, problem in needs if not ready]
 
-# Where the "Hey John" wake word file is (relative names are in the project folder)
+# Where the trained "Hey John" model file is (relative names are in the project folder)
 def wake_word_path(settings):
-    return os.path.join(PROJECT_DIR, settings.get("john_wake_word", "hey-john.ppn"))
+    return os.path.join(PROJECT_DIR, settings.get("john_wake_word", "hey_john.onnx"))
+
+# The wake word model to load and the phrase that wakes it: the trained "Hey John" file if it's there, otherwise
+# openWakeWord's built-in "Hey Jarvis", so John can be used before his own model is trained
+def wake_word_choice(settings):
+    path = wake_word_path(settings)
+    return (path, "Hey John") if os.path.exists(path) else (FALLBACK_WAKE_WORD, "Hey Jarvis")
 
 # The Hey John listener, running in the background for the life of the service
 class John:
@@ -70,10 +76,11 @@ class John:
     def run(self):
         # Anything that stops John from starting is logged; the rest of Nestor keeps running
         try:
-            self.porcupine = pvporcupine.create(access_key=self.secrets["PICOVOICE_ACCESS_KEY"],
-                                                keyword_paths=[wake_word_path(self.settings)],
-                                                sensitivities=[float(self.settings.get("john_sensitivity", 0.5))])
-            self.recorder = pvrecorder.PvRecorder(frame_length=self.porcupine.frame_length,
+            model, self.phrase = wake_word_choice(self.settings)
+            openwakeword.utils.download_models([FALLBACK_WAKE_WORD])  # The shared audio models (only the first time)
+            self.wake_word = WakeWordModel(wakeword_models=[model], inference_framework="onnx")
+            self.threshold = float(self.settings.get("john_wake_threshold", 0.5))
+            self.recorder = pvrecorder.PvRecorder(frame_length=FRAME_LENGTH,
                                                   device_index=find_microphone(self.settings.get("microphone", "")))
             log.info("Loading speech-to-text (%s); the first time downloads it",
                      self.settings.get("whisper_model", "small.en"))
@@ -83,7 +90,7 @@ class John:
         except Exception as error:
             log.error("Hey John couldn't start: %s", error)
             return
-        log.info("Hey John is listening on %s", self.recorder.selected_device)
+        log.info("Hey John is listening on %s: say \"%s\"", self.recorder.selected_device, self.phrase)
         self.recorder.start()
 
         # Wait for the wake word, then hold a conversation; problems are logged and listening carries on
@@ -93,10 +100,14 @@ class John:
                 frame = self.recorder.read()
                 self.learn_noise(frame)
 
-                # "Hey John" heard
-                if self.porcupine.process(frame) >= 0:
-                    log.info("Heard the wake word")
+                scores = self.wake_word.predict(numpy.array(frame, dtype=numpy.int16))
+
+                # "Hey John" heard: talk, then clear the wake word's memory of the audio so it doesn't fire twice
+                if max(scores.values()) >= self.threshold:
+                    log.info("Heard the wake word (score %.2f)", max(scores.values()))
+                    self.wake_word.reset()
                     self.conversation()
+                    self.wake_word.reset()
             except Exception as error:
                 log.error("Hey John had a problem: %s", error)
                 play_sound(self.announcer, "error")
@@ -140,7 +151,7 @@ class John:
 
     # Record from the microphone until speech ends; returns the samples, or [] if nobody spoke within wait_seconds
     def record(self, wait_seconds):
-        frame_seconds = self.porcupine.frame_length / SAMPLE_RATE
+        frame_seconds = FRAME_LENGTH / SAMPLE_RATE
         threshold = max(MIN_SPEECH_LEVEL, self.noise * SPEECH_OVER_NOISE)
         recorded = []
         speech_seconds = 0.0

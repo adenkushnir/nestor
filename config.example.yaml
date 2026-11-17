@@ -32,14 +32,14 @@ reminder_heads_up_minutes: 15
 # Calendar events from Datebook get a heads-up this many minutes before (0 = never). Events with a leave-by from
 # Datebook and all-day events are skipped, and it's only spoken while your phone is home.
 event_heads_up_minutes: 10
-# Hey John, the voice assistant (needs ANTHROPIC_API_KEY and PICOVOICE_ACCESS_KEY in .env, and the wake word file)
+# Hey John, the voice assistant (needs Nestor's own ANTHROPIC_API_KEY in .env)
 john: true
 # Your name, so John knows who he's talking to (empty = "the user")
 john_owner_name: ""
-# The "Hey John" wake word file from the Picovoice Console, in the project folder
-john_wake_word: "hey-john.ppn"
-# 0.0 to 1.0: higher hears "Hey John" more easily, but also wakes up by mistake more often
-john_sensitivity: 0.5
+# The trained "Hey John" openWakeWord model, in the project folder. Until it exists, say "Hey Jarvis" instead.
+john_wake_word: "hey_john.onnx"
+# 0.0 to 1.0: lower hears "Hey John" more easily, but also wakes up by mistake more often
+john_wake_threshold: 0.5
 # Part of the microphone's name to use (e.g. "USB"); empty = the computer's default microphone
 microphone: ""
 # Speech-to-text model: "base.en" is faster, "small.en" is more accurate (downloaded the first time)
