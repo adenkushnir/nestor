@@ -8,12 +8,15 @@ PC on the same Wi-Fi.
 - **Speak anything** from a terminal (`python speak.py "dinner's ready"`) or from any program through a local web API.
 - **Alerts** from your computer: Claude Code finished a task, a GitHub Actions run failed, a long command is done.
 - **Reminders and a morning briefing** with weather, news, sunrise and sunset, and your Google Calendar.
-- **"Hey Google" commands that run code on your PC**, such as focus mode and goodnight, using Google Home routines.
-- **Auto-pause** of the speaker's music when you join a call on the PC.
+- **"Hey Google" commands that run Nestor's code**, using Google Home routines: "start my day" ends the sleeping
+  period and gives the day ahead, "goodnight" previews tomorrow, plus "what's next" and "next train".
 - **Phone control panel** on your home Wi-Fi.
-- **"Hey Claude" voice assistant**: the PC's microphone hears you, Claude answers out loud on the speaker, and it can set
-  reminders, search the web and remember things.
+- **"Hey John" voice assistant**: a microphone by the wall screen hears you, Claude answers out loud on the speaker,
+  and it can set reminders, add plans to Datebook, search the web and control Nestor.
 - **Govee lights**: alert flashes, focus colours, goodnight fade.
+- **Datebook** (the [Datebook](https://github.com/adenkushnir/text-to-calendar) phone app): its leave-by alerts,
+  travel changes and reminders spoken at home, and its plans, lists and reminders in the briefing.
+- **Later:** Nestor running 24/7 on an ASUS Tinker Board with a 7" wall screen showing your day in Datebook's look.
 
 ## How it works
 
@@ -148,10 +151,13 @@ work without a restart:
 .venv/Scripts/python briefing.py          # speak it now
 .venv/Scripts/python briefing.py --show   # just print it
 .venv/Scripts/python briefing.py --json   # the data behind it
+.venv/Scripts/python briefing.py --tomorrow   # tomorrow's preview instead (works with --show and --json)
 ```
 
-The briefing gives the date, the weather (Open-Meteo, free, no key), sunrise and sunset, today's reminders, and GitHub
-news from overnight. Set `home_location` in `config.yaml` to `"Town, ST"`, a ZIP code or `"lat,lon"` for the weather.
+The briefing gives the date, the weather (Open-Meteo, free, no key), sunrise and sunset, today's reminders (Nestor's
+and Datebook's), bills and assignments due, the plans waiting in Datebook, and GitHub news from overnight. The
+tomorrow preview gives tomorrow's weather, reminders, what's due and the waiting plans. Set `home_location` in
+`config.yaml` to `"Town, ST"`, a ZIP code or `"lat,lon"` for the weather.
 
 To use `remind` and `briefing` from any folder, add these to `~/.bashrc`:
 
@@ -168,15 +174,82 @@ it. Everything is JSON.
 | Request | What it does |
 |---|---|
 | `POST /speak` `{"text", "wait"}` | Speak straight away |
-| `POST /alert` `{"text", "source"}` | Speak an alert (held during quiet hours) |
-| `GET /alerts?limit=20` | Recent alerts, newest first |
+| `POST /alert` `{"text", "source", "expires", "key"}` | Speak an alert (see below) |
+| `GET /alerts?limit=20` | Recent alerts, newest first, with what happened to each (`status`) |
 | `GET /reminders` | One-off, repeating and today's reminders |
 | `POST /reminders` `{"text", "at"}` or `{"text", "when": "tomorrow 6pm"}` | Add a one-off reminder |
 | `DELETE /reminders/<id>` | Delete a one-off reminder |
-| `GET /briefing` | The briefing as data and text |
-| `POST /briefing` `{"wait"}` | Speak the briefing |
+| `GET /briefing?day=tomorrow` | The briefing as data and text (`day` is `today` unless given) |
+| `POST /briefing` `{"day", "wait"}` | Speak the briefing |
 | `GET /health` | Is Nestor running, and which speaker |
+| `POST /pair`, `DELETE /pair`, `/datebook/...` | The Datebook link (see [Datebook](#datebook)) |
+
+An alert is spoken straight away, or held during quiet hours and played when they end. Two optional fields change that:
+- **`expires`**: a date and time, like `2026-11-17T18:40:00` (a time zone is allowed). If the alert can't be spoken by
+  then, it's dropped instead of played late.
+- **`key`**: an alert with the same key as one in the last 12 hours isn't spoken again.
+
+The answer's `status` says what happened: `spoken`, `held`, `dropped` or `repeat`. Alerts with `"source": "datebook"`
+are tidied for speaking ("6:37 PM · 20 min drive" is read as "6:37 PM, 20 minute drive").
+
+## Datebook
+
+Nestor and the [Datebook](https://github.com/adenkushnir/text-to-calendar) Android app work together on the home
+Wi-Fi. Nothing goes over the internet, and away from home Datebook simply doesn't send anything.
+
+**Finding Nestor:** Nestor announces itself on the network as `_nestor._tcp` (mDNS), so Datebook finds it with no
+address to type, also after Nestor moves to another computer.
+
+**Pairing**, once per phone:
+
+```bash
+.venv/Scripts/python -m nestor --pair
+```
+
+This prints a 6-digit code that works for 10 minutes (5 wrong tries and it stops working). Type it in Datebook under
+Settings > Nestor. Datebook gets a token it sends with every call. Nestor keeps only a fingerprint of it, in
+`data/paired.json`; delete that file to unpair every phone. Pages on the same computer as Nestor (the wall display)
+need no token.
+
+| Request | What it does |
+|---|---|
+| `POST /pair` `{"code", "device"}` | Pair with the code; answers `{"token"}` |
+| `DELETE /pair` | Unpair the phone whose token is sent |
+| `PUT /datebook/state` | Datebook sends its whole snapshot; it replaces the last one |
+| `GET /datebook/state` | The snapshot, plus `connected`, `updated` and `stale` (no update for 24 hours) |
+| `GET /datebook/events` | The snapshot as a live feed (Server-Sent Events), for the wall display |
+| `POST /datebook/actions` | Ask the phone to do something (from the wall display or Hey John) |
+| `GET /datebook/actions?wait=50` | Datebook collects the waiting actions, holding the request open up to 50 seconds |
+
+Datebook calls send `Authorization: Bearer <token>`.
+
+**The snapshot** (every part is optional; dates are `2026-11-20`, times `2026-11-20T19:00`):
+
+```json
+{
+  "waiting": [{"id": 12, "title": "Dinner at Luigi's", "start": "2026-11-20T19:00", "end": "", "all_day": false,
+               "place": "Luigi's, 12 Main St", "from": "Jake", "kind": "event", "change": ""}],
+  "lists": {
+    "packages": [{"id": 6, "title": "Cleats", "carrier": "UPS", "number": "1Z...", "track_url": "https://...",
+                  "expected": "2026-11-19"}],
+    "bills": [{"id": 4, "title": "Electric bill", "due": "2026-11-20"}],
+    "assignments": [{"id": 5, "title": "CS essay", "due": "2026-11-21T23:59"}],
+    "trips": [{"id": 3, "title": "Chicago", "start": "2026-12-04", "end": "2026-12-07"}]
+  },
+  "notes": [{"id": 9, "text": "Gate code 4412"}],
+  "reminders": [{"id": 7, "text": "Call the dentist", "at": "2026-11-18T09:00"}],
+  "trip": {"from": "NB", "to": "NY", "from_name": "New Brunswick", "to_name": "New York Penn Station"}
+}
+```
+
+**Actions** wait for the phone for up to 10 minutes, then are dropped, so an old tap never pops up later:
+- `{"action": "add", "id": 12}`: Datebook shows its Add to calendar? prompt for that plan.
+- `{"action": "ignore", "id": 12}`: Datebook ignores the plan.
+- `{"action": "done", "id": 4}`: marks a bill, assignment or reminder done.
+- `{"action": "new_plan", "text": "dinner with Sam Friday at 7"}`: Datebook reads it like a typed note and shows the
+  prompt.
 
 ## Status
 
-Milestones 1 (speaking), 2 (alerts) and 3 (reminders and briefing) are done; the other features are on the way.
+Milestones 1 (speaking), 2 (alerts) and 3 (reminders and briefing) are done, and Nestor's side of the Datebook link is
+ready; the other features are on the way.

@@ -80,27 +80,37 @@ def find_location(setting):
     write_json(LOCATION_PATH, location)
     return location
 
-# Today's weather as JSON-ready data: now, high, low, conditions, when rain is likely, sunrise and sunset
-def forecast(setting, temperature_unit="fahrenheit"):
+# The weather today (or days_ahead days from now) as JSON-ready data: now (today only), high, low, conditions, when
+# rain is likely, sunrise and sunset
+def forecast(setting, temperature_unit="fahrenheit", days_ahead=0):
     location = find_location(setting)
     answer = fetch_json(FORECAST_URL, {
         "latitude": location["latitude"], "longitude": location["longitude"], "timezone": "auto",
         "current": "temperature_2m,weather_code", "hourly": "precipitation_probability",
-        "daily": "temperature_2m_max,temperature_2m_min,sunrise,sunset,precipitation_probability_max",
-        "temperature_unit": temperature_unit, "forecast_days": 1})
-    current_hour = answer["current"]["time"][:13]
+        "daily": "temperature_2m_max,temperature_2m_min,sunrise,sunset,precipitation_probability_max,weather_code",
+        "temperature_unit": temperature_unit, "forecast_days": days_ahead + 1})
+    daily = answer["daily"]
+    day_text = daily["time"][days_ahead]
+    from_hour = answer["current"]["time"][:13] if days_ahead == 0 else day_text + "T00"  # Today: from now on
     rain_from = None
 
-    # The first hour from now on with a good chance of rain
+    # The first hour of the day (from now on, for today) with a good chance of rain
     for hour_text, chance in zip(answer["hourly"]["time"], answer["hourly"]["precipitation_probability"]):
-        # Only later hours with a high enough chance
-        if hour_text[:13] >= current_hour and chance is not None and chance >= RAIN_LIKELY_PERCENT:
+        # Only hours on the day, later than from_hour, with a high enough chance
+        if hour_text[:10] == day_text and hour_text[:13] >= from_hour and chance is not None and \
+                chance >= RAIN_LIKELY_PERCENT:
             rain_from = hour_text[11:16]
             break
-    daily = answer["daily"]
-    return {"place": location["name"], "unit": "F" if temperature_unit == "fahrenheit" else "C",
-            "now": round(answer["current"]["temperature_2m"]),
-            "conditions": WEATHER_WORDS.get(answer["current"]["weather_code"], "mixed"),
-            "high": round(daily["temperature_2m_max"][0]), "low": round(daily["temperature_2m_min"][0]),
-            "rain_chance": daily["precipitation_probability_max"][0], "rain_from": rain_from,
-            "sunrise": daily["sunrise"][0][11:16], "sunset": daily["sunset"][0][11:16]}
+
+    # Today has the temperature right now; a later day only its own forecast
+    if days_ahead == 0:
+        now = round(answer["current"]["temperature_2m"])
+        conditions = WEATHER_WORDS.get(answer["current"]["weather_code"], "mixed")
+    else:
+        now = None
+        conditions = WEATHER_WORDS.get(daily["weather_code"][days_ahead], "mixed")
+    return {"place": location["name"], "unit": "F" if temperature_unit == "fahrenheit" else "C", "date": day_text,
+            "now": now, "conditions": conditions, "high": round(daily["temperature_2m_max"][days_ahead]),
+            "low": round(daily["temperature_2m_min"][days_ahead]),
+            "rain_chance": daily["precipitation_probability_max"][days_ahead], "rain_from": rain_from,
+            "sunrise": daily["sunrise"][days_ahead][11:16], "sunset": daily["sunset"][days_ahead][11:16]}

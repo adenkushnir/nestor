@@ -1,5 +1,6 @@
 # Queues messages and speaks them one batch at a time: chime, speech, then the speaker goes back to how it was.
 # Alerts that arrive during quiet hours are saved and played once quiet hours end.
+import datetime
 import logging
 import os
 import queue
@@ -15,20 +16,49 @@ MAX_TEXT_LENGTH = 1000
 HELD_PATH = os.path.join(DATA_DIR, "held_alerts.json")
 HISTORY_PATH = os.path.join(DATA_DIR, "alert_history.json")
 HISTORY_KEPT = 200
+REPEAT_HOURS = 12  # An alert with the same key as one in the last 12 hours is a repeat and isn't spoken again
 log = logging.getLogger(__name__)
 
-# Read the recent alerts, oldest first: dicts with time, text, source and held (for the briefing and the wall display)
+# Read the recent alerts, oldest first: dicts with time, text, source, status ("spoken", "held", "dropped" or
+# "repeat"), held, and the key and expiry they came with (for the briefing and the wall display)
 def read_history():
     return read_json(HISTORY_PATH, [])
 
 # Add one alert to the history, keeping only the most recent ones
-def add_to_history(text, source, held):
-    entry = {"time": time.strftime("%Y-%m-%dT%H:%M:%S"), "text": text, "source": source, "held": held}
+def add_to_history(text, source, status, key=None, expires=None):
+    entry = {"time": time.strftime("%Y-%m-%dT%H:%M:%S"), "text": text, "source": source, "status": status,
+             "held": status == "held", "key": key, "expires": expires}
     write_json(HISTORY_PATH, (read_history() + [entry])[-HISTORY_KEPT:])
 
-# Read the alerts held during quiet hours (saved to disk, so a restart overnight doesn't lose them)
+# True if an alert with this key came in during the last 12 hours (Datebook sends a notification again when it updates)
+def is_repeat(key, now):
+    since = (now - datetime.timedelta(hours=REPEAT_HOURS)).isoformat(timespec="seconds")
+    return any(entry.get("key") == key and entry["time"] >= since for entry in read_history())
+
+# Mark held alerts that expired before quiet hours ended as dropped in the history
+def mark_dropped(texts):
+    history = read_history()
+
+    # The most recent held entry with each text is the one that was dropped
+    for text in texts:
+        # Search from the newest entry back
+        for entry in reversed(history):
+            # Only a held entry with the same text
+            if entry["text"] == text and entry.get("status", "held" if entry.get("held") else "spoken") == "held":
+                entry["status"] = "dropped"
+                entry["held"] = False
+                break
+    write_json(HISTORY_PATH, history)
+
+# True if an alert's expiry ("2026-11-17T18:40:00", or None for never) is still ahead
+def still_fresh(expires, now):
+    return not expires or datetime.datetime.fromisoformat(expires) > now
+
+# Read the alerts held during quiet hours (saved to disk, so a restart overnight doesn't lose them), as dicts with
+# text and expires; older saves held plain texts
 def read_held():
-    return read_json(HELD_PATH, [])
+    saved = read_json(HELD_PATH, [])
+    return [entry if isinstance(entry, dict) else {"text": entry, "expires": None} for entry in saved]
 
 # Save the list of held alerts
 def write_held(held_alerts):
@@ -60,23 +90,31 @@ class Announcer:
         self.jobs.put((texts, done))
         return done
 
-    # Speak an alert now, or hold it during quiet hours; source says where it came from ("github", "reminder", ...).
-    # Returns True if it was held.
-    def alert(self, text, source="other"):
+    # Speak an alert now, or hold it during quiet hours; source says where it came from ("github", "reminder",
+    # "datebook", ...). expires ("2026-11-17T18:40:00") drops it if it can't be spoken by then, and key skips repeats.
+    # Returns what happened: "spoken", "held", "dropped" or "repeat".
+    def alert(self, text, source="other", expires=None, key=None):
         text = text.strip()[:MAX_TEXT_LENGTH]
-        held = self.quiet_hours.is_quiet()
+        now = datetime.datetime.now()
 
         # Every alert goes in the history; at night it is also saved for the morning instead of spoken
         with self.held_lock:
-            add_to_history(text, source, held)
-
-            # Hold it, or speak it now
-            if held:
-                write_held(read_held() + [text])
+            # Skip repeats and alerts that are already too late, otherwise hold or speak
+            if key and is_repeat(key, now):
+                status = "repeat"
+                log.info("Skipping a repeat: %s", text)
+            elif not still_fresh(expires, now):
+                status = "dropped"
+                log.info("Dropping an alert that came in too late: %s", text)
+            elif self.quiet_hours.is_quiet():
+                status = "held"
+                write_held(read_held() + [{"text": text, "expires": expires}])
                 log.info("Holding until quiet hours end: %s", text)
             else:
+                status = "spoken"
                 self.say(text)
-        return held
+            add_to_history(text, source, status, key, expires)
+        return status
 
     # Background loop: once quiet hours are over, play any alerts that were held
     def release_held(self):
@@ -87,9 +125,17 @@ class Announcer:
                 with self.held_lock:
                     held_alerts = read_held()
 
-                    # Empty the saved list now that they are about to play
+                    # Empty the saved list now that they are about to play, and drop the ones that went stale
                     if held_alerts:
                         write_held([])
+                        now = datetime.datetime.now()
+                        stale = [alert["text"] for alert in held_alerts if not still_fresh(alert["expires"], now)]
+                        held_alerts = [alert["text"] for alert in held_alerts if still_fresh(alert["expires"], now)]
+
+                        # Note the stale ones in the history
+                        if stale:
+                            mark_dropped(stale)
+                            log.info("Dropped %d held alerts that went stale overnight", len(stale))
 
                 # Introduce the held alerts, then play them all as one batch
                 if held_alerts:

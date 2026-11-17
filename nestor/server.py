@@ -1,24 +1,65 @@
 # Nestor's local web server: serves audio to the speaker, takes messages from other programs, and offers reminders,
 # the briefing and recent alerts as JSON (for the phone page, Datebook and the wall display)
 import datetime
+import json
 import logging
 from flask import Flask
+from flask import Response
 from flask import jsonify
 from flask import request
 from flask import send_from_directory
+from nestor import datebook
 from nestor import reminders
 from nestor.announcer import MAX_TEXT_LENGTH
 from nestor.announcer import read_history
+from nestor.briefing import DAYS
 from nestor.briefing import build_briefing
 from nestor.config import CACHE_DIR
 from nestor.quiet import QuietHours
+from nestor.spoken import speakable
 from nestor.spoken import spoken_moment
 from nestor.when import parse_when
 WAIT_TIMEOUT_SECONDS = 180
+MAX_REQUEST_BYTES = 1_000_000  # Datebook's snapshot is the biggest thing sent in
+HEARTBEAT_SECONDS = 25  # The live feed sends a keep-alive this often, so idle connections aren't cut
+LOCAL_ADDRESSES = ("127.0.0.1", "::1")
+
+# Read the request's JSON object or form fields; returns (payload, error response or None). Bodies that aren't UTF-8
+# are read as Windows text, because Git Bash's curl sends characters like "·" in the Windows code page.
+def read_body():
+    # Form posts (and requests without a JSON body) are read as they are
+    if not request.is_json:
+        return request.form, None
+    raw = request.get_data()
+
+    # UTF-8 first, Windows text if that fails
+    try:
+        body_text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        body_text = raw.decode("cp1252", errors="replace")
+
+    # An empty body is an empty object
+    if not body_text.strip():
+        return {}, None
+
+    # It has to be a JSON object
+    try:
+        payload = json.loads(body_text)
+    except ValueError as error:
+        return None, (jsonify(error=f"the body isn't valid JSON: {error}"), 400)
+
+    # Lists, numbers and strings aren't accepted
+    if not isinstance(payload, dict):
+        return None, (jsonify(error="send a JSON object, like {\"text\": \"...\"}"), 400)
+    return payload, None
 
 # Pull the message text out of a JSON body or form; returns (text, payload, error response or None)
 def read_message():
-    payload = request.get_json(silent=True) or request.form
+    payload, error = read_body()
+
+    # A body that can't be read gets its own error
+    if error:
+        return "", payload, error
     text = str(payload.get("text") or "").strip()
 
     # Refuse empty or very long messages
@@ -32,9 +73,41 @@ def read_message():
 def wants_wait(payload):
     return payload.get("wait") in (True, "true", "1")
 
+# Read a date and time sent in ("2026-11-17T18:40:00", with or without a time zone) as local time; None if empty.
+# Raises ValueError if it isn't a date and time.
+def local_moment(text):
+    # Empty means none
+    if not text:
+        return None
+    moment = datetime.datetime.fromisoformat(str(text))
+
+    # Times with a zone are turned into this computer's local time
+    if moment.tzinfo:
+        moment = moment.astimezone().replace(tzinfo=None)
+    return moment
+
+# Which briefing the request asked for, "today" or "tomorrow"; None if it's neither
+def asked_day(payload):
+    day = str(payload.get("day") or "today").lower()
+    return day if day in DAYS else None
+
+# The token a request carries in its "Authorization: Bearer ..." header (empty if none)
+def bearer_token():
+    header = request.headers.get("Authorization", "")
+    return header[7:].strip() if header.startswith("Bearer ") else ""
+
+# None if the request may use Datebook's data (it comes from this machine, e.g. the wall display, or carries a paired
+# phone's token), otherwise the error response to send back
+def refuse_unpaired():
+    # Local pages need no token
+    if request.remote_addr in LOCAL_ADDRESSES or datebook.check_token(bearer_token()):
+        return None
+    return jsonify(error="pair with Nestor first: python -m nestor --pair"), 401
+
 # Build the Flask app around the announcer and the settings
 def create_app(announcer, settings):
     app = Flask(__name__)
+    app.config["MAX_CONTENT_LENGTH"] = MAX_REQUEST_BYTES
     logging.getLogger("werkzeug").setLevel(logging.WARNING)  # Hide a log line for every audio request
 
     # Serve generated audio (speech and chime) to the speaker
@@ -57,7 +130,8 @@ def create_app(announcer, settings):
             done.wait(WAIT_TIMEOUT_SECONDS)
         return jsonify(queued=True)
 
-    # Speak an alert from another program ({"text": "...", "source": "datebook"}); held during quiet hours
+    # Speak an alert from another program: {"text": "...", "source": "datebook", "expires": "2026-11-17T18:40:00",
+    # "key": "..."}. Held during quiet hours; dropped once it expires; a repeated key is spoken only once.
     @app.post("/alert")
     def alert():
         text, payload, error = read_message()
@@ -65,7 +139,20 @@ def create_app(announcer, settings):
         # Bad requests get their error back
         if error:
             return error
-        return jsonify(queued=True, held=announcer.alert(text, source=str(payload.get("source") or "other")))
+        source = str(payload.get("source") or "other")
+
+        # The expiry must be a date and time
+        try:
+            expires = local_moment(payload.get("expires"))
+        except ValueError:
+            return jsonify(error="expires must be a date and time like 2026-11-17T18:40:00"), 400
+
+        # Datebook sends its notifications as they look on the phone, so make them read well aloud
+        if source == "datebook":
+            text = speakable(text)
+        status = announcer.alert(text, source=source, key=str(payload.get("key") or "") or None,
+                                 expires=expires.isoformat(timespec="seconds") if expires else None)
+        return jsonify(queued=status in ("spoken", "held"), held=status == "held", status=status)
 
     # Recent alerts, newest first (?limit=20)
     @app.get("/alerts")
@@ -112,16 +199,30 @@ def create_app(announcer, settings):
             return jsonify(error="no reminder with that id"), 404
         return jsonify(deleted=True)
 
-    # The briefing as data and text, without speaking it
+    # The briefing as data and text, without speaking it (?day=tomorrow for the goodnight preview)
     @app.get("/briefing")
     def show_briefing():
-        return jsonify(build_briefing(settings))
+        day = asked_day(request.args)
 
-    # Speak the briefing now ({"wait": true} to reply after it has been spoken)
+        # Only today and tomorrow have briefings
+        if not day:
+            return jsonify(error="day must be today or tomorrow"), 400
+        return jsonify(build_briefing(settings, day=day))
+
+    # Speak the briefing now ({"day": "tomorrow"} for the preview, {"wait": true} to reply after it has been spoken)
     @app.post("/briefing")
     def speak_briefing():
-        payload = request.get_json(silent=True) or request.form
-        briefing = build_briefing(settings)
+        payload, error = read_body()
+
+        # A body that can't be read gets its error back
+        if error:
+            return error
+        day = asked_day(payload)
+
+        # Only today and tomorrow have briefings
+        if not day:
+            return jsonify(error="day must be today or tomorrow"), 400
+        briefing = build_briefing(settings, day=day)
         done = announcer.say(briefing["text"])
 
         # Optionally hold the reply until the briefing has been spoken
@@ -133,4 +234,106 @@ def create_app(announcer, settings):
     @app.get("/health")
     def health():
         return jsonify(status="ok", speaker=announcer.speaker.name)
+
+    # Pair a phone: {"code": "123456", "device": "Pixel 9"} with the code from python -m nestor --pair; answers
+    # {"token": "..."}, which the phone sends with every Datebook call after that
+    @app.post("/pair")
+    def pair():
+        payload, error = read_body()
+
+        # A body that can't be read gets its error back
+        if error:
+            return error
+        token, problem = datebook.pair(payload.get("code") or "", payload.get("device") or "")
+
+        # A wrong or old code gets the reason back
+        if problem:
+            return jsonify(error=problem), 403
+        return jsonify(token=token), 201
+
+    # Unpair the phone whose token this is
+    @app.delete("/pair")
+    def unpair():
+        # Only a known token can be removed
+        if not datebook.unpair(bearer_token()):
+            return jsonify(error="that token isn't paired"), 404
+        return jsonify(unpaired=True)
+
+    # Datebook's latest snapshot, with "connected", "stale" and "updated"
+    @app.get("/datebook/state")
+    def datebook_state():
+        return refuse_unpaired() or jsonify(datebook.read_state())
+
+    # Datebook sends its whole snapshot (waiting, lists, notes, reminders, trip); it replaces the last one
+    @app.put("/datebook/state")
+    def save_datebook_state():
+        refused = refuse_unpaired()
+
+        # Only paired phones (or this machine) may change it
+        if refused:
+            return refused
+        snapshot, error = read_body()
+
+        # It has to be a JSON object
+        if error or not request.is_json:
+            return error or (jsonify(error="send the snapshot as a JSON object"), 400)
+        datebook.save_state(snapshot)
+        return jsonify(saved=True)
+
+    # Live feed of Datebook's snapshot for the wall display (Server-Sent Events): the current one straight away,
+    # then each new one as it arrives
+    @app.get("/datebook/events")
+    def datebook_events():
+        refused = refuse_unpaired()
+
+        # Only paired phones (or this machine) may watch it
+        if refused:
+            return refused
+
+        # Send snapshots as they change, and a keep-alive comment when there's nothing new
+        def stream():
+            version = -1
+
+            # Runs until the page closes the connection
+            while True:
+                version, state = datebook.next_state(version, HEARTBEAT_SECONDS)
+
+                # A quiet spell gets a comment line, a change the new snapshot
+                if state is None:
+                    yield ": still here\n\n"
+                else:
+                    yield f"event: state\ndata: {json.dumps(state)}\n\n"
+        return Response(stream(), mimetype="text/event-stream", headers={"Cache-Control": "no-cache"})
+
+    # Ask the phone to do something: {"action": "add" | "ignore" | "done", "id": 12} or
+    # {"action": "new_plan", "text": "dinner with Sam Friday at 7"}
+    @app.post("/datebook/actions")
+    def add_datebook_action():
+        refused = refuse_unpaired()
+
+        # Only paired phones (or this machine) may queue actions
+        if refused:
+            return refused
+        payload, error = read_body()
+
+        # A body that can't be read gets its error back
+        if error:
+            return error
+
+        # Bad actions get the reason back
+        try:
+            queued = datebook.add_action(payload.get("action"), payload.get("id"), payload.get("text"))
+        except ValueError as error:
+            return jsonify(error=str(error)), 400
+        return jsonify(queued=queued), 201
+
+    # The phone collects waiting actions; ?wait=50 holds the request open up to 50 seconds until one arrives
+    @app.get("/datebook/actions")
+    def take_datebook_actions():
+        refused = refuse_unpaired()
+
+        # Only paired phones (or this machine) may take them
+        if refused:
+            return refused
+        return jsonify(actions=datebook.take_actions(request.args.get("wait", default=0, type=float)))
     return app

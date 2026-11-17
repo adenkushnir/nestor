@@ -1,6 +1,10 @@
 # Turns names, durations, times and dates into words that sound right when spoken
 import datetime
 import os
+import re
+TRAVEL_WORDS = "drive|walk|ride|bike|trip|transit|train|wait|delay|delayed|late|early|away"
+SHORT_UNITS = re.compile(rf"\b(\d+) ?(min|mins|hr|hrs)\b( (?:{TRAVEL_WORDS})\b)?", re.IGNORECASE)
+EMOJI = re.compile("[\U0001F000-\U0001FAFF←-⇿⌀-⏿☀-➿⬀-⯿️‍]")
 
 # Say a folder or repo name out loud: the spoken_names setting first, otherwise hyphens and underscores become spaces
 def spoken_name(raw_name, settings):
@@ -66,6 +70,33 @@ def spoken_moment(moment, now=None):
 # Say a "HH:MM" time (as stored in JSON), e.g. "16:42" -> "4:42 PM"
 def spoken_hhmm(hhmm):
     return spoken_clock(datetime.time(int(hhmm[:2]), int(hhmm[3:5])))
+
+# Say "20 min" as "20 minutes", or "20 minute" when it describes something ("20 min drive" -> "20 minute drive")
+def spoken_units(match):
+    count, unit, described = match.group(1), match.group(2).lower(), match.group(3) or ""
+    word = "minute" if unit.startswith("min") else "hour"
+
+    # Describing words take the singular; on its own it's plural unless there's just one
+    if described or count == "1":
+        return f"{count} {word}{described}"
+    return f"{count} {word}s"
+
+# Make notification text (like Datebook's) read well aloud: "Leave by 6:37 PM · 20 min drive 🚆" becomes
+# "Leave by 6:37 PM, 20 minute drive"; each line becomes its own sentence
+def speakable(text):
+    text = EMOJI.sub("", text).replace("·", ",")
+    text = SHORT_UNITS.sub(spoken_units, text)
+    sentences = []
+
+    # Tidy each line and end it with a full stop if it has no ending of its own
+    for line in text.splitlines():
+        line = re.sub(r"\s+", " ", line).strip(" ,")
+        line = re.sub(r" ,", ",", line)
+
+        # Skip lines left empty
+        if line:
+            sentences.append(line if line[-1] in ".!?:" else line + ".")
+    return " ".join(sentences)
 
 # Join items the way people list them: "a", "a and b", "a, b, and c"
 def spoken_list(items):
