@@ -5,6 +5,7 @@ import threading
 from werkzeug.serving import make_server
 from nestor import tts
 from nestor.announcer import Announcer
+from nestor.discovery import Advertiser
 from nestor.github_watch import GitHubWatcher
 from nestor.reminders import ReminderScheduler
 from nestor.server import create_app
@@ -30,6 +31,15 @@ class Service:
         self.web_thread = threading.Thread(target=self.web_server.serve_forever, name="web", daemon=True)
         self.web_thread.start()
         log.info("Web server on %s", base_url)
+        self.advertiser = None
+
+        # Only the full service tells Datebook where it is; a failure there doesn't stop Nestor
+        if watchers:
+            # Announce on the same network as the speaker
+            try:
+                self.advertiser = Advertiser(lan_ip_towards(self.speaker.host), port)
+            except Exception as error:
+                log.warning("Datebook won't be able to find Nestor on the network: %s", error)
 
         # Reminders only fire in the full service, so a quick speak.py never speaks them twice
         if watchers:
@@ -39,7 +49,10 @@ class Service:
         if watchers and settings.get("github_watch", True):
             GitHubWatcher(self.announcer, settings)
 
-    # Stop the web server and disconnect from the speaker
+    # Stop the web server and network announcement, and disconnect from the speaker
     def stop(self):
+        # Only the full service announces itself
+        if self.advertiser:
+            self.advertiser.stop()
         self.web_server.shutdown()
         self.speaker.disconnect()
