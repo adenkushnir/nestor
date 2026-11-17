@@ -24,9 +24,42 @@ MAX_REQUEST_BYTES = 1_000_000  # Datebook's snapshot is the biggest thing sent i
 HEARTBEAT_SECONDS = 25  # The live feed sends a keep-alive this often, so idle connections aren't cut
 LOCAL_ADDRESSES = ("127.0.0.1", "::1")
 
+# Read the request's JSON object or form fields; returns (payload, error response or None). Bodies that aren't UTF-8
+# are read as Windows text, because Git Bash's curl sends characters like "·" in the Windows code page.
+def read_body():
+    # Form posts (and requests without a JSON body) are read as they are
+    if not request.is_json:
+        return request.form, None
+    raw = request.get_data()
+
+    # UTF-8 first, Windows text if that fails
+    try:
+        body_text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        body_text = raw.decode("cp1252", errors="replace")
+
+    # An empty body is an empty object
+    if not body_text.strip():
+        return {}, None
+
+    # It has to be a JSON object
+    try:
+        payload = json.loads(body_text)
+    except ValueError as error:
+        return None, (jsonify(error=f"the body isn't valid JSON: {error}"), 400)
+
+    # Lists, numbers and strings aren't accepted
+    if not isinstance(payload, dict):
+        return None, (jsonify(error="send a JSON object, like {\"text\": \"...\"}"), 400)
+    return payload, None
+
 # Pull the message text out of a JSON body or form; returns (text, payload, error response or None)
 def read_message():
-    payload = request.get_json(silent=True) or request.form
+    payload, error = read_body()
+
+    # A body that can't be read gets its own error
+    if error:
+        return "", payload, error
     text = str(payload.get("text") or "").strip()
 
     # Refuse empty or very long messages
@@ -179,7 +212,11 @@ def create_app(announcer, settings):
     # Speak the briefing now ({"day": "tomorrow"} for the preview, {"wait": true} to reply after it has been spoken)
     @app.post("/briefing")
     def speak_briefing():
-        payload = request.get_json(silent=True) or request.form
+        payload, error = read_body()
+
+        # A body that can't be read gets its error back
+        if error:
+            return error
         day = asked_day(payload)
 
         # Only today and tomorrow have briefings
@@ -202,7 +239,11 @@ def create_app(announcer, settings):
     # {"token": "..."}, which the phone sends with every Datebook call after that
     @app.post("/pair")
     def pair():
-        payload = request.get_json(silent=True) or request.form
+        payload, error = read_body()
+
+        # A body that can't be read gets its error back
+        if error:
+            return error
         token, problem = datebook.pair(payload.get("code") or "", payload.get("device") or "")
 
         # A wrong or old code gets the reason back
@@ -231,11 +272,11 @@ def create_app(announcer, settings):
         # Only paired phones (or this machine) may change it
         if refused:
             return refused
-        snapshot = request.get_json(silent=True)
+        snapshot, error = read_body()
 
         # It has to be a JSON object
-        if not isinstance(snapshot, dict):
-            return jsonify(error="send the snapshot as a JSON object"), 400
+        if error or not request.is_json:
+            return error or (jsonify(error="send the snapshot as a JSON object"), 400)
         datebook.save_state(snapshot)
         return jsonify(saved=True)
 
@@ -273,7 +314,11 @@ def create_app(announcer, settings):
         # Only paired phones (or this machine) may queue actions
         if refused:
             return refused
-        payload = request.get_json(silent=True) or request.form
+        payload, error = read_body()
+
+        # A body that can't be read gets its error back
+        if error:
+            return error
 
         # Bad actions get the reason back
         try:
