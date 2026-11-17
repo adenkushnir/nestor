@@ -5,6 +5,7 @@ import threading
 from werkzeug.serving import make_server
 from nestor import tts
 from nestor.announcer import Announcer
+from nestor.config import load_secrets
 from nestor.discovery import Advertiser
 from nestor.event_alerts import EventAlerts
 from nestor.github_watch import GitHubWatcher
@@ -50,6 +51,23 @@ class Service:
         # GitHub alerts can be turned off in config.yaml
         if watchers and settings.get("github_watch", True):
             GitHubWatcher(self.announcer, settings)
+
+        # Hey John runs in the full service once its keys and wake word file are in place
+        if watchers and settings.get("john", True):
+            self.start_john(settings)
+
+    # Start Hey John, or log what's missing for it (the rest of Nestor runs either way)
+    def start_john(self, settings):
+        from nestor.john import John  # Imported only here: speech-to-text is slow to load, and speak.py doesn't need it
+        from nestor.john import missing_setup
+        secrets = load_secrets()
+        problems = missing_setup(settings, secrets)
+
+        # John needs his keys and wake word first
+        if problems:
+            log.info("Hey John is off until these are set up: %s", "; ".join(problems))
+            return
+        John(self.announcer, settings, secrets)
 
     # Stop the web server and network announcement, and disconnect from the speaker
     def stop(self):

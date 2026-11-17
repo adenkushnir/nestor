@@ -10,6 +10,7 @@ from flask import request
 from flask import send_from_directory
 from nestor import datebook
 from nestor import reminders
+from nestor import routines
 from nestor.announcer import MAX_TEXT_LENGTH
 from nestor.announcer import read_history
 from nestor.briefing import DAYS
@@ -229,6 +230,16 @@ def create_app(announcer, settings):
         if wants_wait(payload):
             done.wait(WAIT_TIMEOUT_SECONDS)
         return jsonify(briefing)
+
+    # "Start my day": end the sleeping period, speak the day ahead, then what was held overnight
+    @app.post("/start-my-day")
+    def start_day():
+        return jsonify(routines.start_my_day(announcer, settings))
+
+    # "Goodnight": speak tomorrow's preview, then start the sleeping period until quiet hours would end
+    @app.post("/goodnight")
+    def good_night():
+        return jsonify(routines.goodnight(announcer, settings))
 
     # Quick check that Nestor is running and which speaker it uses
     @app.get("/health")

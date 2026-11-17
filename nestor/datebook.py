@@ -245,7 +245,8 @@ def datebook_day(day, now=None):
     # Datebook's reminders set for that day ("time" is empty for a reminder with no time of day)
     for reminder in state["reminders"]:
         # Only readable reminders on the day
-        if isinstance(reminder, dict) and reminder.get("text") and str(reminder.get("at") or "")[:10] == day.isoformat():
+        if isinstance(reminder, dict) and reminder.get("text") and \
+                str(reminder.get("at") or "")[:10] == day.isoformat():
             reminders.append({"time": str(reminder["at"])[11:16], "text": reminder["text"]})
     events = [{key: value for key, value in event.items() if key not in ("begins", "ends")}
               for event in events_on(state, day)]

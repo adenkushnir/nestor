@@ -172,6 +172,68 @@ alias remind='"/c/Vibes/Google Home/.venv/Scripts/python" "/c/Vibes/Google Home/
 alias briefing='"/c/Vibes/Google Home/.venv/Scripts/python" "/c/Vibes/Google Home/briefing.py"'
 ```
 
+## Hey John
+
+John is Nestor's voice assistant. Say **"Hey John"** and ask anything. He answers out loud on the speaker:
+
+- "What's on my calendar tomorrow?" or "Did my package come?" (from Datebook)
+- "Add dinner with Sam Friday at 7 to Datebook" (your phone shows Datebook's prompt to confirm)
+- "Remind me in 20 minutes to take the pizza out"
+- "Start my day" ends the sleeping period, reads the day ahead, then anything held overnight
+- "Goodnight" previews tomorrow and starts the sleeping period until quiet hours end
+- "Turn the volume down to 30", "What were the last alerts?", "Remember my locker code is 4412"
+- Anything else, with web search: "Who won the game last night?"
+
+After an answer, John listens for about 8 seconds for a follow-up without "Hey John". Say "stop" or "never mind" to
+end. You'll hear these sounds:
+- a rising tone when he's listening;
+- a falling tone when he's got it;
+- soft taps while Claude is thinking;
+- a low tone if something went wrong.
+
+Timers, alarms, music and lights are coming in later milestones.
+
+**How it works:**
+- **Wake word:** [Porcupine](https://picovoice.ai) hears "Hey John" on the PC's microphone.
+- **Speech to text:** [faster-whisper](https://github.com/SYSTRAN/faster-whisper) turns what you say into text, on
+  the PC.
+- **The answer:** Claude (Opus 5.5 at low effort) answers, using Nestor's tools.
+
+**Privacy:** your voice never leaves the PC. Only the text of what you said goes to Claude, along with what Nestor
+looks up for the answer.
+
+### Setting up John
+
+1. **A Claude API key just for Nestor:** in the [Anthropic Console](https://platform.claude.com), create a new API key
+   (name it "Nestor") and set a monthly spend limit if you like.
+2. **A Picovoice account** (free for personal use) at [console.picovoice.ai](https://console.picovoice.ai):
+   - Copy your **AccessKey**.
+   - Under **Porcupine**, type the wake phrase `Hey John`, choose **Windows**, and download the model.
+   - Unzip it and save the `.ppn` file in the project folder as `hey-john.ppn`.
+3. Create a file called `.env` in the project folder (git never sees it) with your two keys:
+
+   ```
+   ANTHROPIC_API_KEY=sk-ant-...
+   PICOVOICE_ACCESS_KEY=...
+   ```
+
+4. In `config.yaml`, set `john_owner_name` to your name. Once a USB microphone is plugged in, set `microphone` to part
+   of its name; `python -m nestor` logs which microphone John is using.
+5. Start Nestor (`python -m nestor`). The first start downloads the speech-to-text model (about 500 MB). It logs
+   `Hey John is listening on ...`, or lists what's still missing.
+
+John's settings in `config.yaml`:
+
+| Setting | What it does |
+|---|---|
+| `john_sensitivity` | 0.0 to 1.0: higher hears "Hey John" more easily, but also wakes up by mistake more often |
+| `whisper_model` | `small.en` (more accurate) or `base.en` (faster) |
+| `john_model`, `john_effort` | The Claude model and effort |
+| `john_follow_up_seconds` | How long he listens for a follow-up |
+
+John's memory is in `data/memory.json`. The sleeping period that "goodnight" and "start my day" change is in
+`data/sleep.json`.
+
 ## API
 
 Nestor's web server (port 8765, home network only) is also how the phone page, Datebook and the wall display talk to
@@ -187,6 +249,8 @@ it. Everything is JSON.
 | `DELETE /reminders/<id>` | Delete a one-off reminder |
 | `GET /briefing?day=tomorrow` | The briefing as data and text (`day` is `today` unless given) |
 | `POST /briefing` `{"day", "wait"}` | Speak the briefing |
+| `POST /start-my-day` | End the sleeping period, speak the day ahead, then what was held overnight |
+| `POST /goodnight` | Speak tomorrow's preview, then start the sleeping period until quiet hours end |
 | `GET /health` | Is Nestor running, and which speaker |
 | `POST /pair`, `DELETE /pair`, `/datebook/...` | The Datebook link (see [Datebook](#datebook)) |
 
@@ -274,4 +338,5 @@ minutes.
 ## Status
 
 Milestones 1 (speaking), 2 (alerts), 3 (reminders and briefing) and 4 (the calendar from Datebook) are done, and
-Nestor's side of the Datebook link is ready. The other features are on the way.
+Nestor's side of the Datebook link is ready. Hey John (milestone 5) is being built: talking, Datebook, reminders,
+start my day and goodnight work. Timers, alarms and trains come next.

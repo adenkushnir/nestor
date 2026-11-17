@@ -80,14 +80,22 @@ class Announcer:
         threading.Thread(target=self.run, name="announcer", daemon=True).start()
         threading.Thread(target=self.release_held, name="quiet-hours", daemon=True).start()
 
-    # Queue one message, or a list to play together, and return an event set once spoken (or failed)
-    def say(self, texts):
+    # Queue one message, or a list to play together, and return an event set once spoken (or failed);
+    # with_chime=False leaves out the chime (John's answers come straight after his own sounds)
+    def say(self, texts, with_chime=True):
         # A single message is a list of one
         if isinstance(texts, str):
             texts = [texts]
         texts = [text.strip()[:MAX_TEXT_LENGTH] for text in texts if text.strip()]
         done = threading.Event()
-        self.jobs.put((texts, done))
+        self.jobs.put((texts, done, with_chime))
+        return done
+
+    # Queue a short sound (a WAV in the cache folder that lasts the given seconds) with no chime, and return an event
+    # set once it has played
+    def sound(self, file_name, seconds):
+        done = threading.Event()
+        self.jobs.put(([{"sound": file_name, "seconds": seconds}], done, False))
         return done
 
     # Speak an alert now, or hold it during quiet hours; source says where it came from ("github", "reminder",
@@ -120,28 +128,37 @@ class Announcer:
     def release_held(self):
         # Check every 30 seconds for the life of the program
         while True:
-            # Held alerts wait until quiet hours are over
-            if not self.quiet_hours.is_quiet():
-                with self.held_lock:
-                    held_alerts = read_held()
-
-                    # Empty the saved list now that they are about to play, and drop the ones that went stale
-                    if held_alerts:
-                        write_held([])
-                        now = datetime.datetime.now()
-                        stale = [alert["text"] for alert in held_alerts if not still_fresh(alert["expires"], now)]
-                        held_alerts = [alert["text"] for alert in held_alerts if still_fresh(alert["expires"], now)]
-
-                        # Note the stale ones in the history
-                        if stale:
-                            mark_dropped(stale)
-                            log.info("Dropped %d held alerts that went stale overnight", len(stale))
-
-                # Introduce the held alerts, then play them all as one batch
-                if held_alerts:
-                    count_words = "one message" if len(held_alerts) == 1 else f"{len(held_alerts)} messages"
-                    self.say([f"While you were asleep, {count_words} came in."] + held_alerts)
+            self.release_now()
             time.sleep(30)
+
+    # If it isn't quiet hours, play the alerts held overnight (dropping the ones that went stale) and return the event
+    # set once they have played; None if there was nothing to play
+    def release_now(self):
+        # Held alerts wait until quiet hours are over
+        if self.quiet_hours.is_quiet():
+            return None
+
+        # Take the held alerts, so they are played only once
+        with self.held_lock:
+            held_alerts = read_held()
+
+            # Empty the saved list now that they are about to play, and drop the ones that went stale
+            if held_alerts:
+                write_held([])
+                now = datetime.datetime.now()
+                stale = [alert["text"] for alert in held_alerts if not still_fresh(alert["expires"], now)]
+                held_alerts = [alert["text"] for alert in held_alerts if still_fresh(alert["expires"], now)]
+
+                # Note the stale ones in the history
+                if stale:
+                    mark_dropped(stale)
+                    log.info("Dropped %d held alerts that went stale overnight", len(stale))
+
+        # Nothing left to play
+        if not held_alerts:
+            return None
+        count_words = "one message" if len(held_alerts) == 1 else f"{len(held_alerts)} messages"
+        return self.say([f"While you were asleep, {count_words} came in."] + held_alerts)
 
     # Worker loop: wait for messages, and play everything that is waiting as one batch
     def run(self):
@@ -155,35 +172,43 @@ class Announcer:
 
             # A failed batch is logged and the worker carries on with the next one
             try:
-                self.announce([text for texts, done in batch for text in texts])
+                self.announce([item for items, done, wants_chime in batch for item in items],
+                              any(wants_chime for items, done, wants_chime in batch))
             except Exception as error:
                 log.error("Announcement failed: %s", error)
             finally:
                 # Tell everyone waiting on these messages that they are finished
-                for texts, done in batch:
+                for items, done, wants_chime in batch:
                     done.set()
 
-    # Speak a list of messages: make the audio first, then chime, speak each, and restore the speaker
-    def announce(self, texts):
+    # Play a list of messages and sounds: make the audio first, then the chime (if wanted), each item in turn, and
+    # restore the speaker. A message is text; a sound is {"sound": file name, "seconds": length}.
+    def announce(self, items, wants_chime=True):
         # An empty batch has nothing to say
-        if not texts:
+        if not items:
             return
-        speech_files = [tts.make_speech(text, self.voice, self.voice_rate) for text in texts]
+        audio = [item if isinstance(item, dict) else {"text": item, "speech": tts.make_speech(item, self.voice,
+                 self.voice_rate)} for item in items]
         saved = self.speaker.snapshot()
 
         # Whatever happens while playing, the volume and earlier media get restored
         try:
             self.speaker.set_volume(self.announce_volume)
 
-            # The chime is optional in config.yaml
-            if self.chime_file:
+            # The chime is optional in config.yaml, and left out for John's sounds and answers
+            if self.chime_file and wants_chime:
                 self.speaker.play_and_wait(self.media_url(self.chime_file), "audio/wav",
                                            expected_seconds=chime.CHIME_SECONDS)
 
-            # Speak each message in turn
-            for text, speech_file in zip(texts, speech_files):
-                log.info("Speaking: %s", text)
-                self.speaker.play_and_wait(self.media_url(speech_file), "audio/mpeg")
+            # Play each sound or message in turn
+            for item in audio:
+                # Sounds are short WAVs timed by their known length; messages are speech
+                if "sound" in item:
+                    self.speaker.play_and_wait(self.media_url(item["sound"]), "audio/wav",
+                                               expected_seconds=item["seconds"])
+                else:
+                    log.info("Speaking: %s", item["text"])
+                    self.speaker.play_and_wait(self.media_url(item["speech"]), "audio/mpeg")
         finally:
             self.speaker.restore(saved)
 
