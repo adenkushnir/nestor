@@ -55,7 +55,7 @@ def main():
 
     # Hand the alert to Nestor, which holds it overnight during quiet hours
     try:
-        sent = post_to_nestor("/alert", {"text": message}, timeout=10)
+        sent = post_to_nestor("/alert", {"text": message, "source": "tell"}, timeout=10)
     except (ValueError, OSError) as error:
         sent = False
         print(f"tell: could not reach Nestor ({error})", file=sys.stderr)

@@ -6,6 +6,7 @@ from werkzeug.serving import make_server
 from nestor import tts
 from nestor.announcer import Announcer
 from nestor.github_watch import GitHubWatcher
+from nestor.reminders import ReminderScheduler
 from nestor.server import create_app
 from nestor.speaker import Speaker
 log = logging.getLogger(__name__)
@@ -25,10 +26,14 @@ class Service:
         port = int(settings.get("port", 8765))
         base_url = f"http://{lan_ip_towards(self.speaker.host)}:{port}"
         self.announcer = Announcer(self.speaker, settings, base_url)
-        self.web_server = make_server("0.0.0.0", port, create_app(self.announcer), threaded=True)
+        self.web_server = make_server("0.0.0.0", port, create_app(self.announcer, settings), threaded=True)
         self.web_thread = threading.Thread(target=self.web_server.serve_forever, name="web", daemon=True)
         self.web_thread.start()
         log.info("Web server on %s", base_url)
+
+        # Reminders only fire in the full service, so a quick speak.py never speaks them twice
+        if watchers:
+            ReminderScheduler(self.announcer, settings)
 
         # GitHub alerts can be turned off in config.yaml
         if watchers and settings.get("github_watch", True):

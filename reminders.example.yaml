@@ -1,0 +1,9 @@
+# Repeating reminders. Copy this file to reminders.yaml (not committed) and edit it. Nestor reads it on every check,
+# so changes work without a restart. Each reminder is spoken 15 minutes ahead and again at its time.
+# days: daily, weekdays, weekends, one day (tue), or a list ([tue, thu]). time: "18:00", "6pm" or "6:30 pm".
+- text: Take the bins out
+  days: sun
+  time: "20:00"
+- text: Water the plants
+  days: [mon, thu]
+  time: "9am"
