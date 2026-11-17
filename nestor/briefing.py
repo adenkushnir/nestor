@@ -8,6 +8,7 @@ from nestor.announcer import read_history
 from nestor.datebook import datebook_day
 from nestor.datebook import read_moment
 from nestor.reminders import todays_reminders
+from nestor.spoken import speakable
 from nestor.spoken import spoken_clock
 from nestor.spoken import spoken_day
 from nestor.spoken import spoken_hhmm
@@ -15,6 +16,8 @@ from nestor.spoken import spoken_list
 OVERNIGHT_HOURS = 16
 MAX_GITHUB_ITEMS = 3
 MAX_WAITING_ITEMS = 3
+MAX_EVENTS = 5
+ONLINE_PLACES = ("http", "www.", "zoom", "meet.google", "teams.microsoft")  # Places not worth reading out
 DAYS = ("today", "tomorrow")
 log = logging.getLogger(__name__)
 
@@ -74,6 +77,7 @@ def spoken_lines(data, now):
     else:
         lines = [f"Tomorrow is {date.strftime('%A')}, {date.strftime('%B')} {date.day}."]
     lines += weather_lines(data["weather"], now)
+    lines += event_lines(data["datebook"], now, data["day"])
     lines += reminder_lines(data)
     lines += datebook_lines(data["datebook"], now, data["day"])
 
@@ -107,6 +111,98 @@ def weather_lines(forecast, now):
         sunset_tense = "was" if clock_now >= forecast["sunset"] else "is"
         lines.append(f"Sunrise {sunrise_tense} at {spoken_hhmm(forecast['sunrise'])}, and sunset {sunset_tense} at "
                      f"{spoken_hhmm(forecast['sunset'])}.")
+    return lines
+
+# The short name of an event's place worth saying ("Luigi's" from "Luigi's, 12 Main St"), or "" for none, an online
+# link, or a place the title already names
+def spoken_place(event):
+    place = str(event["place"]).split(",")[0].strip()
+
+    # Leave out empty places, links and places already in the title
+    if not place or any(word in place.lower() for word in ONLINE_PLACES) or place.lower() in event["title"].lower():
+        return ""
+    return place
+
+# An event said aloud: "CS lecture at 10 AM", "lunch with Sam at 12:30 PM at Luigi's", "Soccer tournament all day"
+def spoken_event(event):
+    place = spoken_place(event)
+
+    # All-day events have no time of day
+    if event["all_day"]:
+        words = f"{event['title']} all day"
+    else:
+        words = f"{event['title']} at {spoken_clock(read_moment(event['start']).time())}"
+    return f"{words} at {place}" if place else words
+
+# True once a timed event is over (all-day events last the whole day)
+def finished(event, now):
+    # All-day events aren't over until the day is
+    if event["all_day"]:
+        return False
+    return (read_moment(event["end"]) or read_moment(event["start"])) <= now
+
+# "Leave by 8:35 AM, a 20 minute drive" for an event Datebook planned a leave-by for ("" without one)
+def spoken_leave_by(event):
+    leave_by = read_moment(event["leave_by"])
+
+    # Only events with a leave-by
+    if not leave_by:
+        return ""
+    travel = speakable(str(event["travel"])).rstrip(".") if event["travel"] else ""
+    return f"leave by {spoken_clock(leave_by.time())}" + (f", a {travel}" if travel else "")
+
+# What to bring, as a list: "cleats, $20" becomes "cleats and $20"
+def spoken_bring(bring):
+    return spoken_list([item.strip() for item in str(bring).split(",") if item.strip()])
+
+# The calendar from Datebook: today's events still to come (the first few) and the next leave-by, or tomorrow's
+# first event with its leave-by and what to bring
+def event_lines(datebook, now, day):
+    # Nothing from Datebook's calendar yet, nothing to say
+    if not datebook or not datebook["connected"] or not datebook["has_calendar"]:
+        return []
+    events = datebook["events"]
+
+    # A day with nothing on it
+    if not events:
+        return [f"Nothing on your calendar {day}."]
+
+    # Today: what's left of the day, then when to leave for the next thing
+    if day == "today":
+        remaining = [event for event in events if not finished(event, now)]
+
+        # The whole day may already be over
+        if not remaining:
+            return ["That's everything on your calendar for today."]
+        names = [spoken_event(event) for event in remaining[:MAX_EVENTS]]
+
+        # Say how many more there are beyond the first few
+        if len(remaining) > MAX_EVENTS:
+            names.append(f"{len(remaining) - MAX_EVENTS} more")
+        intro = "On your calendar today" if len(remaining) == len(events) else "Still on your calendar today"
+        lines = [f"{intro}: {spoken_list(names)}."]
+        next_leave = [event for event in remaining if read_moment(event["leave_by"]) and
+                      read_moment(event["leave_by"]) > now]
+
+        # The next leave-by Datebook planned
+        if next_leave:
+            lines.append(f"For {next_leave[0]['title']}, {spoken_leave_by(next_leave[0])}.")
+        return lines
+    timed = [event for event in events if not event["all_day"]]
+    first = timed[0] if timed else events[0]
+    first_words = spoken_event(first) + (f", {spoken_leave_by(first)}" if spoken_leave_by(first) else "")
+
+    # One event is the whole day; more get a count first
+    if len(events) == 1:
+        lines = [f"On your calendar tomorrow: {first_words}."]
+    else:
+        lines = [f"You have {len(events)} things on your calendar tomorrow. First up: {first_words}."]
+
+    # What to bring for each event that needs something
+    for event in events:
+        # Only events with a bring list
+        if spoken_bring(event["bring"]):
+            lines.append(f"Bring {spoken_bring(event['bring'])} for {event['title']}.")
     return lines
 
 # Nestor's and Datebook's reminders for the day together, timed ones in order and untimed ones last
@@ -158,11 +254,10 @@ def datebook_lines(datebook, now, day):
             names.append(f"{len(waiting) - MAX_WAITING_ITEMS} more")
         lines.append(f"Datebook has {count_words} waiting for you: {spoken_list(names)}.")
 
-        # Warn when the phone hasn't been home for a while, so the list may be old
-        if datebook["stale"]:
-            updated = datetime.datetime.fromisoformat(datebook["updated"]).date()
-            lines.append(f"Datebook last checked in on {spoken_day(updated, now.date())}, so that may be out of "
-                         "date.")
+    # Warn when the phone hasn't been home for a while, so the calendar and plans may be old
+    if datebook["stale"] and (waiting or datebook["events"]):
+        updated = datetime.datetime.fromisoformat(datebook["updated"]).date()
+        lines.append(f"Datebook last checked in on {spoken_day(updated, now.date())}, so this may be out of date.")
     return lines
 
 # GitHub news from overnight, a few items at most

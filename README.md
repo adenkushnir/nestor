@@ -154,10 +154,16 @@ work without a restart:
 .venv/Scripts/python briefing.py --tomorrow   # tomorrow's preview instead (works with --show and --json)
 ```
 
-The briefing gives the date, the weather (Open-Meteo, free, no key), sunrise and sunset, today's reminders (Nestor's
-and Datebook's), bills and assignments due, the plans waiting in Datebook, and GitHub news from overnight. The
-tomorrow preview gives tomorrow's weather, reminders, what's due and the waiting plans. Set `home_location` in
-`config.yaml` to `"Town, ST"`, a ZIP code or `"lat,lon"` for the weather.
+The briefing gives:
+- the date, the weather (Open-Meteo, free, no key), and sunrise and sunset;
+- what's still on your calendar today (the first 5, from Datebook) and when to leave for the next thing;
+- today's reminders (Nestor's and Datebook's), and bills and assignments due;
+- the plans waiting in Datebook;
+- GitHub news from overnight.
+
+The tomorrow preview gives tomorrow's weather, how many things are on your calendar, the first one and when to
+leave for it, what to bring, reminders, what's due and the waiting plans. Set `home_location` in `config.yaml` to
+`"Town, ST"`, a ZIP code or `"lat,lon"` for the weather.
 
 To use `remind` and `briefing` from any folder, add these to `~/.bashrc`:
 
@@ -216,7 +222,7 @@ need no token.
 | `POST /pair` `{"code", "device"}` | Pair with the code; answers `{"token"}` |
 | `DELETE /pair` | Unpair the phone whose token is sent |
 | `PUT /datebook/state` | Datebook sends its whole snapshot; it replaces the last one |
-| `GET /datebook/state` | The snapshot, plus `connected`, `updated` and `stale` (no update for 24 hours) |
+| `GET /datebook/state` | The snapshot, plus `connected`, `updated`, `stale` (no update for 24 hours) and `phone_home` |
 | `GET /datebook/events` | The snapshot as a live feed (Server-Sent Events), for the wall display |
 | `POST /datebook/actions` | Ask the phone to do something (from the wall display or Hey John) |
 | `GET /datebook/actions?wait=50` | Datebook collects the waiting actions, holding the request open up to 50 seconds |
@@ -238,9 +244,25 @@ Datebook calls send `Authorization: Bearer <token>`.
   },
   "notes": [{"id": 9, "text": "Gate code 4412"}],
   "reminders": [{"id": 7, "text": "Call the dentist", "at": "2026-11-18T09:00"}],
-  "trip": {"from": "NB", "to": "NY", "from_name": "New Brunswick", "to_name": "New York Penn Station"}
+  "trip": {"from": "NB", "to": "NY", "from_name": "New Brunswick", "to_name": "New York Penn Station"},
+  "events": [{"id": "88-1795107600", "title": "Soccer", "start": "2026-11-18T09:00", "end": "2026-11-18T10:30",
+              "all_day": false, "place": "Field 3, Buccleuch Park", "calendar": "Personal", "from": "Coach Dan",
+              "bring": "cleats, $20", "confirmation": "", "track_url": "", "leave_by": "2026-11-18T08:35",
+              "travel": "20 min drive"}]
 }
 ```
+
+`events` are your calendar events from today to 14 days ahead, from the phone's calendars Datebook uses. This is
+how Nestor knows your calendar, with no Google login of its own. All-day events have just a date (`"start":
+"2026-11-18"`).
+
+**Event heads-ups:** while your phone is home, Nestor says "In 10 minutes: CS lecture." before each event with a
+time. All-day events and events Datebook already sends a leave-by for are skipped. Set the minutes with
+`event_heads_up_minutes` in `config.yaml` (0 turns it off).
+
+**Is the phone home?** Every call Datebook makes with its token counts. Its waiting request for actions repeats
+about every 50 seconds while it's on the home Wi-Fi, so the phone counts as home if it called in the last 5
+minutes.
 
 **Actions** wait for the phone for up to 10 minutes, then are dropped, so an old tap never pops up later:
 - `{"action": "add", "id": 12}`: Datebook shows its Add to calendar? prompt for that plan.
@@ -251,5 +273,5 @@ Datebook calls send `Authorization: Bearer <token>`.
 
 ## Status
 
-Milestones 1 (speaking), 2 (alerts) and 3 (reminders and briefing) are done, and Nestor's side of the Datebook link is
-ready; the other features are on the way.
+Milestones 1 (speaking), 2 (alerts), 3 (reminders and briefing) and 4 (the calendar from Datebook) are done, and
+Nestor's side of the Datebook link is ready. The other features are on the way.

@@ -29,3 +29,6 @@ home_location: ""
 temperature_unit: "fahrenheit"
 # Reminders are spoken this many minutes ahead, and again at their time
 reminder_heads_up_minutes: 15
+# Calendar events from Datebook get a heads-up this many minutes before (0 = never). Events with a leave-by from
+# Datebook and all-day events are skipped, and it's only spoken while your phone is home.
+event_heads_up_minutes: 10
