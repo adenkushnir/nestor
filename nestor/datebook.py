@@ -18,9 +18,13 @@ PAIRING_TRIES = 5  # Wrong codes allowed before the code stops working
 STALE_HOURS = 24  # A snapshot older than this may be out of date (the phone hasn't been home)
 ACTION_MINUTES = 10  # Actions the phone hasn't picked up by then are dropped, so an old tap never pops up later
 MAX_WAIT_SECONDS = 55
+HOME_MINUTES = 5  # The phone counts as home if it called Nestor this recently (its waiting request repeats every ~50 s)
 ACTIONS = ("add", "ignore", "done", "new_plan")
-SNAPSHOT_PARTS = ("waiting", "lists", "notes", "reminders", "trip")
+SNAPSHOT_PARTS = ("waiting", "lists", "notes", "reminders", "trip", "events")
+EVENT_FIELDS = ("id", "title", "start", "end", "all_day", "place", "calendar", "from", "bring", "confirmation",
+                "track_url", "leave_by", "travel")
 log = logging.getLogger(__name__)
+last_seen = None  # When a paired phone last called Nestor
 pairing_lock = threading.Lock()
 state_changed = threading.Condition()
 state_version = 0
@@ -66,13 +70,25 @@ def pair(code, device_name, now=None):
     log.info("Paired with %s", device_name or "a phone")
     return token, None
 
-# True if the token belongs to a paired phone
-def check_token(token):
+# True if the token belongs to a paired phone; a match also notes that the phone is home right now
+def check_token(token, now=None):
+    global last_seen
+
     # Without a token there's nothing to match
     if not token:
         return False
     token_print = fingerprint(token)
-    return any(hmac.compare_digest(device["token"], token_print) for device in read_json(PAIRED_PATH, []))
+    paired = any(hmac.compare_digest(device["token"], token_print) for device in read_json(PAIRED_PATH, []))
+
+    # A paired phone calling in means it's on the home Wi-Fi
+    if paired:
+        last_seen = now or datetime.datetime.now()
+    return paired
+
+# True if a paired phone has called Nestor in the last few minutes, i.e. it's on the home Wi-Fi
+def phone_home(now=None):
+    now = now or datetime.datetime.now()
+    return last_seen is not None and now - last_seen <= datetime.timedelta(minutes=HOME_MINUTES)
 
 # Forget the phone with this token; returns True if it was paired
 def unpair(token):
@@ -91,6 +107,8 @@ def read_state(now=None):
     state["connected"] = bool(updated)
     age = now - datetime.datetime.fromisoformat(updated) if updated else None
     state["stale"] = age is None or age > datetime.timedelta(hours=STALE_HOURS)
+    state["phone_home"] = phone_home(now)
+    state["has_calendar"] = isinstance(state.get("events"), list)  # An older Datebook sends no calendar at all
 
     # Missing parts read as empty, so readers don't have to check
     for part in SNAPSHOT_PARTS:
@@ -170,8 +188,44 @@ def read_moment(text):
     except ValueError:
         return None
 
-# What Datebook says about one day, for the briefing: waiting plans (all of them, soonest first), bills and
-# assignments due that day, and Datebook's reminders that day
+# A calendar event from the snapshot with every field present (empty when Datebook didn't send it) and its start and
+# end read as date-times; None if it has no title or readable start
+def clean_event(event):
+    # Only events with a title and a start are any use
+    if not isinstance(event, dict) or not event.get("title") or not read_moment(event.get("start")):
+        return None
+    cleaned = {field: event.get(field) or ("" if field != "all_day" else False) for field in EVENT_FIELDS}
+    cleaned["all_day"] = bool(event.get("all_day")) or "T" not in str(event["start"])
+    cleaned["begins"] = read_moment(event["start"])
+    cleaned["ends"] = read_moment(event.get("end")) or cleaned["begins"]
+    return cleaned
+
+# The calendar events that happen on a day (all-day ones first, then by start time); an all-day event that runs for
+# several days counts on each of them
+def events_on(state, day):
+    found = []
+
+    # Keep the events that touch the day
+    for event in state.get("events") or []:
+        cleaned = clean_event(event)
+
+        # Skip unreadable events
+        if not cleaned:
+            continue
+        first_day = cleaned["begins"].date()
+        last_day = max(cleaned["ends"].date(), first_day)
+
+        # All-day events end at midnight after their last day, so that day doesn't count
+        if cleaned["all_day"] and cleaned["ends"].date() > first_day and cleaned["ends"].time() == datetime.time(0):
+            last_day = cleaned["ends"].date() - datetime.timedelta(days=1)
+
+        # Only events running on the day
+        if first_day <= day <= last_day:
+            found.append(cleaned)
+    return sorted(found, key=lambda event: (not event["all_day"], event["begins"]))
+
+# What Datebook says about one day, for the briefing: calendar events that day, waiting plans (all of them, soonest
+# first), bills and assignments due that day, and Datebook's reminders that day
 def datebook_day(day, now=None):
     state = read_state(now)
     lists = state["lists"] if isinstance(state["lists"], dict) else {}
@@ -193,5 +247,9 @@ def datebook_day(day, now=None):
         # Only readable reminders on the day
         if isinstance(reminder, dict) and reminder.get("text") and str(reminder.get("at") or "")[:10] == day.isoformat():
             reminders.append({"time": str(reminder["at"])[11:16], "text": reminder["text"]})
+    events = [{key: value for key, value in event.items() if key not in ("begins", "ends")}
+              for event in events_on(state, day)]
     return {"connected": state["connected"], "stale": state["stale"], "updated": state.get("updated"),
-            "waiting": waiting, "due": due, "reminders": reminders}
+            "phone_home": state["phone_home"], "has_calendar": state["has_calendar"], "events": events,
+            "waiting": waiting, "due": due,
+            "reminders": reminders}
