@@ -6,11 +6,13 @@ import logging
 from flask import Flask
 from flask import Response
 from flask import jsonify
+from flask import redirect
 from flask import request
 from flask import send_from_directory
 from nestor import datebook
 from nestor import reminders
 from nestor import routines
+from nestor import spotify
 from nestor import timers
 from nestor.announcer import MAX_TEXT_LENGTH
 from nestor.announcer import read_history
@@ -111,6 +113,8 @@ def create_app(announcer, settings):
     app = Flask(__name__)
     app.config["MAX_CONTENT_LENGTH"] = MAX_REQUEST_BYTES
     logging.getLogger("werkzeug").setLevel(logging.WARNING)  # Hide a log line for every audio request
+    # Spotify sends the browser back here after signing in (Spotify only allows 127.0.0.1, not localhost)
+    spotify_redirect = f"http://127.0.0.1:{int(settings.get('port', 8765))}/spotify/callback"
 
     # Serve generated audio (speech and chime) to the speaker
     @app.get("/media/<path:file_name>")
@@ -263,6 +267,41 @@ def create_app(announcer, settings):
         if not timers.cancel(item_id):
             return jsonify(error="no timer or alarm with that id"), 404
         return jsonify(deleted=True)
+
+    # What's playing on Spotify, for the wall screen: {"playing", "track", "artists", "album", "art", "progress_ms",
+    # "duration_ms", "device", "signed_in"}
+    @app.get("/music")
+    def now_playing():
+        # Without Spotify set up there's nothing playing to show
+        if spotify.music:
+            state = dict(spotify.music.now, signed_in=spotify.music.signed_in())
+        else:
+            state = dict(spotify.describe_player(None), signed_in=False)
+        return refuse_unpaired() or jsonify(state)  # Only this machine (the wall screen) and a paired phone may look
+
+    # Sign Nestor in to Spotify: open http://127.0.0.1:8765/spotify/login in a browser on this PC
+    @app.get("/spotify/login")
+    def spotify_login():
+        # Only from this PC, and only once Spotify is set up in .env
+        if request.remote_addr not in LOCAL_ADDRESSES:
+            return jsonify(error="sign in from the PC Nestor runs on"), 403
+        elif not spotify.music:
+            return jsonify(error="put SPOTIFY_CLIENT_ID in .env and restart Nestor first"), 503
+        return redirect(spotify.music.login_url(spotify_redirect))
+
+    # Where Spotify comes back to with the sign-in code
+    @app.get("/spotify/callback")
+    def spotify_callback():
+        # Spotify sends an error instead when the sign-in was cancelled
+        if request.args.get("error") or not spotify.music:
+            return f"Spotify sign-in didn't finish: {request.args.get('error') or 'Spotify is not set up'}", 400
+
+        # A bad or old code is explained
+        try:
+            spotify.music.finish_login(request.args.get("code", ""), request.args.get("state", ""), spotify_redirect)
+        except spotify.SpotifyError as error:
+            return f"Spotify sign-in didn't finish: {error}", 400
+        return "Nestor is signed in to Spotify. You can close this tab."
 
     # Quick check that Nestor is running and which speaker it uses
     @app.get("/health")

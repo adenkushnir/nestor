@@ -65,5 +65,9 @@ govee: true
 # Names for groups of lights, by their Govee device ids (Nestor logs them when it finds the lights), e.g.
 # "wall": ["2F:3A:..."]. "Lights" alone always means all of them.
 light_groups: {}
+# Spotify on your phone and laptop (needs SPOTIFY_CLIENT_ID in .env; see the README)
+spotify: true
+# How loud Spotify goes (percent) while John listens or Nestor speaks, if it was louder
+music_duck_volume: 20
 # How loud timers and alarms ring, 0.0 to 1.0
 alarm_volume: 0.75

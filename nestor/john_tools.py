@@ -1,13 +1,15 @@
 # Hey John's tools: what Claude can look up and do through Nestor (Datebook, reminders, timers and alarms, trains, the
-# day ahead and goodnight, volume, recent alerts, memory) plus web search, with the context line John sees before each
-# thing the user says
+# day ahead and goodnight, volume, recent alerts, lights, Spotify, memory) plus web search, with the context line John
+# sees before each thing the user says
 import datetime
 import json
+import logging
 from nestor import datebook
 from nestor import govee
 from nestor import memory
 from nestor import reminders
 from nestor import routines
+from nestor import spotify
 from nestor import timers
 from nestor import trains
 from nestor.announcer import read_history
@@ -17,6 +19,7 @@ from nestor.spoken import spoken_moment
 MAX_TOOL_RESULT = 12000  # Characters; a tool result longer than this is cut, so one answer stays affordable
 TEXT = {"type": "string"}
 WEB_SEARCH = {"type": "web_search_20260209", "name": "web_search", "max_uses": 3}
+log = logging.getLogger(__name__)
 
 # A tool definition for Claude: every listed property is required, and tools with several inputs get a strict schema
 # (Claude allows at most 20 strict tools, and a tool with one input or none has little to check)
@@ -110,6 +113,15 @@ def tool_definitions():
         tool("list_moods", "List the saved moods with their colours and effects."),
         tool("use_mood", "Show a saved mood by its name.", {"name": TEXT}),
         tool("delete_mood", "Delete a saved mood by its name.", {"name": TEXT}),
+        tool("play_music", "Play music on Spotify on the user's phone or laptop (not the speaker): a song, artist, "
+             "album or one of their playlists by name. With an empty query it resumes, or moves the music to the "
+             "named device.",
+             {"query": {"type": "string", "description": "What to play, e.g. 'Taylor Swift' or 'Gym'; empty to resume"},
+              "kind": {"type": "string", "enum": list(spotify.KINDS), "description": "any if unsure"},
+              "device": {"type": "string", "description": "e.g. 'laptop' or 'phone'; empty for where it's playing or "
+                                                          "was last played"}}),
+        tool("music_control", "Pause, resume, skip to the next or previous song on Spotify, or check what's playing.",
+             {"action": {"type": "string", "enum": ["pause", "resume", "next", "previous", "now_playing"]}}),
         tool("remember", "Remember a lasting fact about the user when asked, or what lighting they liked for an "
              "activity (e.g. 'likes dim warm drifting light for comedies').", {"fact": TEXT}),
         tool("forget", "Forget remembered facts containing these words, when asked.", {"about": TEXT}),
@@ -155,6 +167,7 @@ class JohnTools:
             result = self.call(block.name, block.input)
             return {"type": "tool_result", "tool_use_id": block.id, "content": trimmed(result)}
         except Exception as error:
+            log.info("John's %s failed: %s", block.name, error)
             return {"type": "tool_result", "tool_use_id": block.id, "content": f"Error: {error}", "is_error": True}
 
     # Do what a tool asks and return the result as text
@@ -212,6 +225,8 @@ class JohnTools:
         elif name in ("set_lights", "preview_mood", "adjust_mood", "save_mood", "list_moods", "use_mood",
                       "delete_mood"):
             return self.lights(name, arguments)
+        elif name in ("play_music", "music_control"):
+            return self.music(name, arguments)
         elif name == "remember":
             return json.dumps({"remembered": memory.remember(arguments["fact"])})
         elif name == "forget":
@@ -246,6 +261,22 @@ class JohnTools:
                 said["title"] = said.pop("title_spoken")
                 spoken.append(said)
         return spoken
+
+    # The Spotify tools
+    def music(self, name, arguments):
+        # Spotify needs setting up first
+        if not spotify.music or not spotify.music.signed_in():
+            raise RuntimeError("Spotify isn't set up yet (it needs SPOTIFY_CLIENT_ID in .env and a sign-in on the PC)")
+
+        # Play something, check what's playing, or a control
+        if name == "play_music":
+            return json.dumps(spotify.music.play(arguments["query"].strip(), arguments["kind"],
+                                                 arguments["device"].strip()))
+        elif arguments["action"] == "now_playing":
+            now = spotify.music.what_is_playing()
+            return json.dumps({key: now[key] for key in ("playing", "track", "artists")})  # Only what John says
+        else:
+            return json.dumps(spotify.music.control(arguments["action"]))
 
     # The Govee light tools
     def lights(self, name, arguments):
