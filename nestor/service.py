@@ -14,6 +14,7 @@ from nestor.reminders import ReminderScheduler
 from nestor.timers import TimerScheduler
 from nestor.server import create_app
 from nestor.speaker import Speaker
+from nestor.spotify import Spotify
 log = logging.getLogger(__name__)
 
 # Find this computer's IP address on the network that leads to the speaker
@@ -59,6 +60,10 @@ class Service:
                 GoveeLights(settings.get("light_groups"))
             except OSError as error:
                 log.warning("Govee lights are off: %s", error)
+
+        # Spotify, once its Client ID is in .env (the sign-in itself happens in the browser, see the README)
+        if watchers and settings.get("spotify", True) and load_secrets().get("SPOTIFY_CLIENT_ID"):
+            Spotify(load_secrets()["SPOTIFY_CLIENT_ID"], int(settings.get("music_duck_volume", 20)))
 
         # GitHub alerts can be turned off in config.yaml
         if watchers and settings.get("github_watch", True):

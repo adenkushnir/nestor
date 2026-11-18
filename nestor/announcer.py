@@ -8,6 +8,7 @@ import threading
 import time
 from nestor import chime
 from nestor import govee
+from nestor import spotify
 from nestor import tts
 from nestor.config import DATA_DIR
 from nestor.quiet import QuietHours
@@ -215,8 +216,9 @@ class Announcer:
                  self.voice_rate)} for item in items]
         saved = self.speaker.snapshot()
         self.speaker.interrupted.clear()
+        spotify.duck()  # Spotify on the phone or laptop goes quieter while Nestor speaks
 
-        # Whatever happens while playing, the volume (if changed) and earlier media get restored
+        # Whatever happens while playing, the volume (if changed), earlier media and Spotify's volume get restored
         try:
             # The volume only changes when asked for, since each change makes the speaker's sound
             if volume is not None:
@@ -242,6 +244,7 @@ class Announcer:
                     break
         finally:
             self.speaker.restore(saved, restore_volume=volume is not None)
+            spotify.undo_duck()
 
     # Address the speaker uses to fetch a file from Nestor's web server
     def media_url(self, file_name):

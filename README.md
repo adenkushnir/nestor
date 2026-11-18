@@ -14,6 +14,8 @@ PC on the same Wi-Fi.
 - **"Hey John" voice assistant**: a microphone by the wall screen hears you, Claude answers out loud on the speaker,
   and it can set reminders, add plans to Datebook, search the web and control Nestor.
 - **Govee lights**: alert flashes, focus colours, goodnight fade.
+- **Spotify**: John plays and controls the music on your phone or laptop, and Nestor keeps track of what's playing for
+  the wall screen.
 - **Datebook** (the [Datebook](https://github.com/adenkushnir/text-to-calendar) phone app): its leave-by alerts,
   travel changes and reminders spoken at home, and its plans, lists and reminders in the briefing.
 - **Later:** Nestor running 24/7 on an ASUS Tinker Board with a 7" wall screen showing your day in Datebook's look.
@@ -62,7 +64,8 @@ reach this API.
 
 Nestor plays a chime and speaks at the speaker's own volume (it never changes the volume for announcements, since
 every change makes the speaker's sound; only alarms turn it up). Audio that was playing in the speaker's
-built-in media player resumes. Music from apps like Spotify stops and has to be restarted by hand.
+built-in media player resumes. Music from apps like Spotify on the speaker itself stops and has to be restarted by
+hand; Spotify on your phone or laptop is just turned down while Nestor speaks (see [Spotify](#spotify)).
 
 ## Alerts
 
@@ -203,7 +206,7 @@ end. You'll hear these sounds:
 - soft taps while Claude is thinking;
 - a low tone if something went wrong.
 
-Music is coming in a later milestone. For lights, see [Govee lights](#govee-lights).
+For music, see [Spotify](#spotify); for lights, see [Govee lights](#govee-lights).
 
 ### Timers and alarms
 
@@ -317,6 +320,37 @@ group during a mood takes only that group out of it.
 
 Each comes slow, medium or fast. Saved moods are in `data/moods.json`.
 
+## Spotify
+
+John controls Spotify on your phone or laptop; the music doesn't play on the Google speaker. Nestor also keeps track
+of what's playing, for the wall screen.
+
+**By voice:**
+- "Play Taylor Swift, John", "play my Gym playlist", "play the album 1989", "play Levitating".
+- "Pause", "resume", "skip", "go back", "what's playing?".
+- "Play it on my laptop" moves the music there.
+
+When nothing is playing, John starts the music on the device you last used, if Spotify is open on it. While John
+listens or Nestor speaks, the music is turned down to `music_duck_volume` (20% unless set in `config.yaml`) and back
+up afterwards. Devices that don't let other apps change their volume are paused instead. While music plays, John
+doesn't listen for a follow-up after answering (the microphone would hear the music), so say "Hey John" again.
+
+John keeps it short: "Playing Taylor Swift.", "Paused your music.", "Skipped." He only names the song when you ask
+what's playing ("Levitating by Dua Lipa"), and never says the device.
+
+**Setup (once):**
+1. Spotify only lets Premium accounts use its developer API.
+2. Open the [Spotify developer dashboard](https://developer.spotify.com/dashboard), sign in and click **Create app**:
+   - name and description: anything, e.g. "Nestor";
+   - Redirect URI: `http://127.0.0.1:8765/spotify/callback` (Spotify doesn't allow `localhost`);
+   - API: **Web API**.
+3. Open the app's settings, copy the **Client ID**, and add it to `.env` as `SPOTIFY_CLIENT_ID=...`. No client secret
+   is needed: Nestor signs in with PKCE.
+4. Restart Nestor, then open `http://127.0.0.1:8765/spotify/login` in a browser on the same PC and allow access.
+
+The sign-in is kept in `data/spotify_token.json` and the last device used in `data/spotify_device.json`. Turn Spotify
+off with `spotify: false` in `config.yaml`.
+
 ## API
 
 Nestor's web server (port 8765, home network only) is also how the phone page, Datebook and the wall display talk to
@@ -337,6 +371,8 @@ it. Everything is JSON.
 | `GET /timers` | Timers and alarms set, when each rings, and what's ringing |
 | `POST /timers/stop`, `POST /timers/snooze` | Stop or snooze what's ringing |
 | `DELETE /timers/<id>` | Cancel a timer or alarm |
+| `GET /music` | What's playing on Spotify: track, artists, album, album art URL, progress and device |
+| `GET /spotify/login` | Sign Nestor in to Spotify (open it in a browser on the PC) |
 | `GET /health` | Is Nestor running, and which speaker |
 | `POST /pair`, `DELETE /pair`, `/datebook/...` | The Datebook link (see [Datebook](#datebook)) |
 

@@ -16,6 +16,7 @@ from openwakeword.model import Model as WakeWordModel
 from openwakeword.vad import VAD
 from nestor import govee
 from nestor import routines
+from nestor import spotify
 from nestor import timers
 from nestor.brain import Brain
 from nestor.config import PROJECT_DIR
@@ -226,10 +227,13 @@ class John:
         if govee.lights:
             govee.lights.start_glow()
 
-        # The ringing always resumes and the glow ends, even if the conversation fails
+        # The ringing always resumes, the glow ends and the music comes back up, even if the conversation fails
         try:
+            spotify.duck()  # Spotify on the phone or laptop goes quieter while John listens and answers
             self.conversation(first_words)
         finally:
+            spotify.undo_duck()
+
             # Let ringing carry on
             if timers.scheduler:
                 timers.scheduler.paused.clear()
@@ -282,6 +286,10 @@ class John:
             wait_seconds = LOOKING_SECONDS if self.brain.tools.showed_look else self.follow_up_seconds
             self.brain.tools.showed_look = False
             heard = None
+
+            # No follow-up while music plays: the microphone would take the music for speech
+            if spotify.music_playing():
+                return
 
     # True if something is ringing, the speaker is in a quiet gap between bursts, and this moment sounds like a voice
     def voice_in_ringing_gap(self, frame):
