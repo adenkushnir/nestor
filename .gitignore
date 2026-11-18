@@ -7,7 +7,8 @@ google_credentials.json
 google_token.json
 # API keys
 .env
-# Porcupine wake word models are licensed to your Picovoice account
+# Your trained "Hey John" wake word model
+hey_john.onnx
 *.ppn
 # Generated audio, Nestor's saved state (held alerts, GitHub state) and logs
 cache/

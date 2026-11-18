@@ -10,6 +10,8 @@ from flask import request
 from flask import send_from_directory
 from nestor import datebook
 from nestor import reminders
+from nestor import routines
+from nestor import timers
 from nestor.announcer import MAX_TEXT_LENGTH
 from nestor.announcer import read_history
 from nestor.briefing import DAYS
@@ -229,6 +231,38 @@ def create_app(announcer, settings):
         if wants_wait(payload):
             done.wait(WAIT_TIMEOUT_SECONDS)
         return jsonify(briefing)
+
+    # "Start my day": end the sleeping period, speak the day ahead, then what was held overnight
+    @app.post("/start-my-day")
+    def start_day():
+        return jsonify(routines.start_my_day(announcer, settings))
+
+    # "Goodnight": speak tomorrow's preview, then start the sleeping period until quiet hours would end
+    @app.post("/goodnight")
+    def good_night():
+        return jsonify(routines.goodnight(announcer, settings))
+
+    # The timers and alarms set, and what's ringing
+    @app.get("/timers")
+    def list_timers():
+        return jsonify(timers.timers_data())
+
+    # Stop or snooze what's ringing
+    @app.post("/timers/<what>")
+    def stop_timer(what):
+        # Only these two, and only in the full service
+        if what not in ("stop", "snooze") or not timers.scheduler:
+            return jsonify(error="POST /timers/stop or /timers/snooze, while Nestor is running"), 404
+        done = timers.scheduler.stop() if what == "stop" else timers.scheduler.snooze()
+        return jsonify(done=done)
+
+    # Cancel a timer or alarm by its id
+    @app.delete("/timers/<item_id>")
+    def delete_timer(item_id):
+        # Unknown ids get a 404
+        if not timers.cancel(item_id):
+            return jsonify(error="no timer or alarm with that id"), 404
+        return jsonify(deleted=True)
 
     # Quick check that Nestor is running and which speaker it uses
     @app.get("/health")

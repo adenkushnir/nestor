@@ -5,10 +5,12 @@ import threading
 from werkzeug.serving import make_server
 from nestor import tts
 from nestor.announcer import Announcer
+from nestor.config import load_secrets
 from nestor.discovery import Advertiser
 from nestor.event_alerts import EventAlerts
 from nestor.github_watch import GitHubWatcher
 from nestor.reminders import ReminderScheduler
+from nestor.timers import TimerScheduler
 from nestor.server import create_app
 from nestor.speaker import Speaker
 log = logging.getLogger(__name__)
@@ -42,14 +44,34 @@ class Service:
             except Exception as error:
                 log.warning("Datebook won't be able to find Nestor on the network: %s", error)
 
-        # Reminders and event heads-ups only fire in the full service, so a quick speak.py never speaks them twice
+        # Reminders, event heads-ups, timers and alarms only run in the full service, so a quick speak.py never speaks
+        # them twice
         if watchers:
             ReminderScheduler(self.announcer, settings)
             EventAlerts(self.announcer, settings)
+            TimerScheduler(self.announcer, settings)
 
         # GitHub alerts can be turned off in config.yaml
         if watchers and settings.get("github_watch", True):
             GitHubWatcher(self.announcer, settings)
+
+        # Hey John runs in the full service; he loads in the background, as his libraries take a while
+        if watchers and settings.get("john", True):
+            log.info("Hey John is starting in the background (this takes about a minute)")
+            threading.Thread(target=self.start_john, args=(settings,), name="john-start", daemon=True).start()
+
+    # Start Hey John, or log what's missing for it (the rest of Nestor runs either way)
+    def start_john(self, settings):
+        from nestor.john import John  # Imported here only: John's libraries load slowly, and speak.py doesn't need them
+        from nestor.john import missing_setup
+        secrets = load_secrets()
+        problems = missing_setup(settings, secrets)
+
+        # John needs his keys and wake word first
+        if problems:
+            log.info("Hey John is off until these are set up: %s", "; ".join(problems))
+            return
+        John(self.announcer, settings, secrets)
 
     # Stop the web server and network announcement, and disconnect from the speaker
     def stop(self):

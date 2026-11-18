@@ -60,7 +60,8 @@ curl -X POST http://localhost:8765/speak -H "Content-Type: application/json" -d 
 Add `"wait": true` to get the reply only after the message has been spoken. Note that anyone on your home Wi-Fi can
 reach this API.
 
-Nestor plays a chime, speaks at `announce_volume`, then puts the volume back. Audio that was playing in the speaker's
+Nestor plays a chime and speaks at the speaker's own volume (it never changes the volume for announcements, since
+every change makes the speaker's sound; only alarms turn it up). Audio that was playing in the speaker's
 built-in media player resumes. Music from apps like Spotify stops and has to be restarted by hand.
 
 ## Alerts
@@ -172,6 +173,94 @@ alias remind='"/c/Vibes/Google Home/.venv/Scripts/python" "/c/Vibes/Google Home/
 alias briefing='"/c/Vibes/Google Home/.venv/Scripts/python" "/c/Vibes/Google Home/briefing.py"'
 ```
 
+## Hey John
+
+John is Nestor's voice assistant. Say **"Hey John"** and ask anything. He answers out loud on the speaker:
+
+- "What's on my calendar tomorrow?" or "Did my package come?" (from Datebook)
+- "Add dinner with Sam Friday at 7 to Datebook" (your phone shows Datebook's prompt to confirm)
+- "Remind me in 20 minutes to take the pizza out"
+- "Start my day" ends the sleeping period, reads the day ahead, then anything held overnight
+- "Goodnight" previews tomorrow and starts the sleeping period until quiet hours end
+- "Turn the volume down to 30", "What were the last alerts?", "Remember my locker code is 4412"
+- "Set a timer for 10 minutes", "Wake me up at 7", "Set an alarm for 6:45 every weekday"
+- "When's the next train?" or "Next train back from New York?" (live NJ Transit)
+- Anything else, with web search: "Who won the game last night?"
+
+After an answer, John listens for about 5 seconds for a follow-up without "Hey John". Say "stop" or "never mind" to
+end. You'll hear these sounds:
+- a rising tone when he's listening;
+- a falling tone when he's got it;
+- soft taps while Claude is thinking;
+- a low tone if something went wrong.
+
+Music and lights are coming in later milestones.
+
+### Timers and alarms
+
+Timers and alarms ring on the speaker in bursts of the alarm tone with a few seconds' gap, so John can hear you. The
+first burst also says what's ringing ("Your pasta timer is done.", "It's 7 AM. Gym."). While it's ringing:
+- **"Stop":** stops it. There's no need for "Hey John" first while something rings, but "Hey John, stop" works too.
+- **"Snooze":** rings again in 9 minutes, or as long as you say ("snooze for 2 minutes").
+
+They ring at `alarm_volume` (75% unless set in `config.yaml`). Alarms ring up to 5 minutes and timers up to 1
+minute if nobody stops them. They ring even in the sleeping period.
+Stopping an alarm during the sleeping period also runs "start my day". Alarms can repeat ("every weekday", "Monday,
+Wednesday and Friday"). Ask John to list or cancel them. They're kept in `data/timers.json`.
+
+### Trains
+
+"When's the next train?" reads NJ Transit's live departure board for your trip: the next 3 trains, their tracks and
+delays. Ask "the next train back" for the other way, or name any two stations. It uses your NJ Transit developer
+account (the same one as Datebook) and keeps its sign-in token in `data/`, because NJ Transit allows only 5 new
+tokens a day. Your trip is Datebook's saved trip once Datebook is linked; until then, set `train_from` and
+`train_to` in `config.yaml` to the stations' two-letter codes, e.g. `"NB"` and `"NY"`.
+
+**How it works:**
+- **Wake word:** [openWakeWord](https://github.com/dscripka/openWakeWord) (open source, no account) hears "Hey
+  John" on the PC's microphone.
+- **Speech to text:** [faster-whisper](https://github.com/SYSTRAN/faster-whisper) turns what you say into text, on
+  the PC.
+- **The answer:** Claude (Opus 5.5 at low effort) answers, using Nestor's tools.
+
+**Privacy:** your voice never leaves the PC. Only the text of what you said goes to Claude, along with what Nestor
+looks up for the answer.
+
+### Setting up John
+
+1. **A Claude API key just for Nestor:** in the [Anthropic Console](https://platform.claude.com), create a new API key
+   (name it "Nestor") and set a monthly spend limit if you like.
+2. Create a file called `.env` in the project folder (git never sees it) with the key:
+
+   ```
+   ANTHROPIC_API_KEY=sk-ant-...
+   NJT_USERNAME=your NJ Transit developer username (for trains)
+   NJT_PASSWORD=its password
+   ```
+
+3. **Train the "Hey John" wake word** (free, about an hour, mostly waiting) with openWakeWord's
+   [training notebook](https://colab.research.google.com/drive/1q1oe2zOyZp7UsB3jJiQ1IFn8z5YfjwEb?usp=sharing) on
+   Google Colab. Enter `hey john` as the wake word, run it, and download the `.onnx` model. Save it in the project
+   folder as `hey_john.onnx`. **Until then, John answers to "Hey Jarvis"**, openWakeWord's built-in model.
+
+4. In `config.yaml`, set `john_owner_name` to your name. Once a USB microphone is plugged in, set `microphone` to part
+   of its name; `python -m nestor` logs which microphone John is using.
+5. Start Nestor (`python -m nestor`). The first start downloads the speech-to-text model (about 500 MB). It logs
+   `Hey John is listening on ...`, or lists what's still missing.
+
+John's settings in `config.yaml`:
+
+| Setting | What it does |
+|---|---|
+| `john_speech_threshold` | How sure the speech detector must be that it hears a voice; `python -m nestor --mic-test` shows its scores |
+| `john_wake_threshold` | 0.0 to 1.0: lower hears "Hey John" more easily, but also wakes up by mistake more often |
+| `whisper_model` | `small.en` (more accurate) or `base.en` (faster) |
+| `john_model`, `john_effort` | The Claude model and effort |
+| `john_follow_up_seconds` | How long he listens for a follow-up |
+
+John's memory is in `data/memory.json`. The sleeping period that "goodnight" and "start my day" change is in
+`data/sleep.json`.
+
 ## API
 
 Nestor's web server (port 8765, home network only) is also how the phone page, Datebook and the wall display talk to
@@ -187,6 +276,11 @@ it. Everything is JSON.
 | `DELETE /reminders/<id>` | Delete a one-off reminder |
 | `GET /briefing?day=tomorrow` | The briefing as data and text (`day` is `today` unless given) |
 | `POST /briefing` `{"day", "wait"}` | Speak the briefing |
+| `POST /start-my-day` | End the sleeping period, speak the day ahead, then what was held overnight |
+| `POST /goodnight` | Speak tomorrow's preview, then start the sleeping period until quiet hours end |
+| `GET /timers` | Timers and alarms set, when each rings, and what's ringing |
+| `POST /timers/stop`, `POST /timers/snooze` | Stop or snooze what's ringing |
+| `DELETE /timers/<id>` | Cancel a timer or alarm |
 | `GET /health` | Is Nestor running, and which speaker |
 | `POST /pair`, `DELETE /pair`, `/datebook/...` | The Datebook link (see [Datebook](#datebook)) |
 
@@ -274,4 +368,5 @@ minutes.
 ## Status
 
 Milestones 1 (speaking), 2 (alerts), 3 (reminders and briefing) and 4 (the calendar from Datebook) are done, and
-Nestor's side of the Datebook link is ready. The other features are on the way.
+Nestor's side of the Datebook link is ready. Hey John (milestone 5) is being tested: talking, Datebook,
+reminders, timers, alarms, trains, start my day and goodnight.

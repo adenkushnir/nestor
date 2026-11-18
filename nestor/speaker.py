@@ -1,5 +1,6 @@
 # Finds the Google speaker on the network and plays audio on it over the Cast protocol
 import logging
+import threading
 import time
 import pychromecast
 from pychromecast.controllers.media import MEDIA_PLAYER_STATE_BUFFERING
@@ -60,6 +61,7 @@ class Speaker:
         self.name = self.cast.name
         self.host = self.cast.cast_info.host
         self.play_counter = 0
+        self.interrupted = threading.Event()  # Set to cut short what's playing now
         log.info("Connected to %s at %s", self.name, self.host)
 
     # Set the speaker volume (0.0 to 1.0)
@@ -81,10 +83,17 @@ class Speaker:
                                "paused": media_status.player_state == MEDIA_PLAYER_STATE_PAUSED}
         return saved
 
-    # Put the volume back and resume earlier media where possible
-    def restore(self, saved):
-        self.set_volume(saved["volume"])
+    # The speaker's volume right now (0.0 to 1.0)
+    def volume(self):
+        return self.cast.status.volume_level
+
+    # Resume earlier media where possible, and put the volume back if it was changed
+    def restore(self, saved, restore_volume=False):
         resume = saved["resume"]
+
+        # Only a changed volume is put back, since every change makes the speaker's sound
+        if restore_volume:
+            self.set_volume(saved["volume"])
 
         # Restart the earlier media at the position it was interrupted
         if resume:
@@ -98,6 +107,7 @@ class Speaker:
 
     # Play one audio URL and block until it has finished (or a timeout passes). expected_seconds is for clips the
     # speaker never reports as finished (Google Home Speaker hangs ~30 s after WAV files): done once that long played.
+    # Returns "done", or "interrupted" if interrupt() cut it short.
     def play_and_wait(self, url, content_type, expected_seconds=None, max_seconds=180):
         # A unique query string means the status for this play can't be mixed up with an earlier one
         self.play_counter += 1
@@ -115,20 +125,24 @@ class Speaker:
             is_this_media = media_status.content_id == unique_url
             player_state = media_status.player_state
 
-            # Note when playback begins, and stop waiting once it is over
-            if is_this_media and player_state in ACTIVE_STATES and playing_since is None:
+            # Note when playback begins, stop early if interrupted, and stop waiting once it is over
+            if self.interrupted.is_set():
+                media.stop()
+                return "interrupted"
+            elif is_this_media and player_state in ACTIVE_STATES and playing_since is None:
                 playing_since = time.time()
             elif is_this_media and player_state == MEDIA_PLAYER_STATE_IDLE and media_status.idle_reason == "ERROR":
                 raise RuntimeError(f"Speaker could not play {url}")
             elif is_this_media and player_state == MEDIA_PLAYER_STATE_IDLE and (
                     playing_since or media_status.idle_reason == "FINISHED"):
-                return
+                return "done"
             elif playing_since and expected_seconds and time.time() - playing_since > expected_seconds + 0.3:
-                return
+                return "done"
             elif not playing_since and time.time() > start_deadline:
                 raise RuntimeError(f"Speaker did not start playing {url}")
             time.sleep(0.1)
         log.warning("Gave up waiting for %s to finish", url)
+        return "done"
 
     # Close the connection to the speaker and stop network discovery
     def disconnect(self):

@@ -7,8 +7,6 @@ speaker_host: ""
 voice: "en-US-EmmaMultilingualNeural"
 # Speaking speed, e.g. "+10%" or "-5%"
 voice_rate: "+0%"
-# Volume for announcements, 0.0 to 1.0 (the previous volume is restored afterwards)
-announce_volume: 0.5
 # Play a short chime before each announcement
 chime: true
 # Port of Nestor's web server (the speaker fetches its audio from here)
@@ -32,3 +30,29 @@ reminder_heads_up_minutes: 15
 # Calendar events from Datebook get a heads-up this many minutes before (0 = never). Events with a leave-by from
 # Datebook and all-day events are skipped, and it's only spoken while your phone is home.
 event_heads_up_minutes: 10
+# Hey John, the voice assistant (needs Nestor's own ANTHROPIC_API_KEY in .env)
+john: true
+# Your name, so John knows who he's talking to (empty = "the user")
+john_owner_name: ""
+# The trained "Hey John" openWakeWord model, in the project folder. Until it exists, say "Hey Jarvis" instead.
+john_wake_word: "hey_john.onnx"
+# 0.0 to 1.0: lower hears "Hey John" more easily, but also wakes up by mistake more often
+john_wake_threshold: 0.5
+# Part of the microphone's name to use (e.g. "USB"); empty = the computer's default microphone
+microphone: ""
+# How sure the speech detector must be that a sound is a voice, 0.0 to 1.0 (lower hears quieter speech;
+# python -m nestor --mic-test shows its scores)
+john_speech_threshold: 0.4
+# Speech-to-text model: "base.en" is faster, "small.en" is more accurate (downloaded the first time)
+whisper_model: "small.en"
+# Claude model and effort for John's answers ("low" answers fastest)
+john_model: "claude-opus-5-5"
+john_effort: "low"
+# How many seconds John keeps listening for a follow-up without "Hey John"
+john_follow_up_seconds: 5
+# Your usual NJ Transit trip, as two-letter station codes (e.g. "NB" and "NY"); Datebook's saved trip wins once
+# it's linked. Live trains need NJT_USERNAME and NJT_PASSWORD (your NJ Transit developer account) in .env.
+train_from: ""
+train_to: ""
+# How loud timers and alarms ring, 0.0 to 1.0
+alarm_volume: 0.75
