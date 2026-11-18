@@ -1,8 +1,8 @@
 # Timers and alarms ("set a timer for 10 minutes", "wake me at 7", "every weekday at 6:45"), kept in
 # data/timers.json. They ring on the speaker in bursts (the alarm tone and a spoken line, then a short gap, so John can
-# hear "Hey John, stop"), up to 5 minutes for alarms and 1 minute for timers, at alarm_volume. Tapping the top of the
-# speaker stops it too. Snooze is 9 minutes unless you say how long, and stopping an alarm during the sleeping period
-# also starts the day.
+# hear "stop" or "snooze"), up to 5 minutes for alarms and 1 minute for timers, at alarm_volume. The first burst says
+# what's ringing; after that it's the tone only. Snooze is 9 minutes unless you say how long, and stopping an alarm
+# during the sleeping period also starts the day.
 import datetime
 import logging
 import os
@@ -192,8 +192,8 @@ class TimerScheduler:
         started = time.time()
         speaker = self.announcer.speaker
         volume_before = speaker.volume()
+        spoken_once = False
         log.info("Ringing: %s", ring_line(item, datetime.datetime.now()))
-        speaker.watching_taps = True
         speaker.set_volume(self.volume)  # Once for the whole ringing, since every change makes the speaker's sound
 
         # Ring until stopped, and always put the volume back afterwards
@@ -204,17 +204,17 @@ class TimerScheduler:
                 if self.paused.is_set():
                     time.sleep(0.2)
                     continue
-                burst_started = time.time()
-                self.announcer.sound(tone, tone_seconds)
-                self.announcer.say(ring_line(item, datetime.datetime.now()), with_chime=False).wait(60)
+                done = self.announcer.sound(tone, tone_seconds)
 
-                # A tap on the speaker during the burst stops the ringing
-                if self.announcer.tapped_at >= burst_started:
-                    self.stop_request = "stop"
+                # Only the first burst says what's ringing, so the room is quieter for "stop"
+                if spoken_once:
+                    done.wait(60)
+                else:
+                    self.announcer.say(ring_line(item, datetime.datetime.now()), with_chime=False).wait(60)
+                    spoken_once = True
                 self.wait_for_stop(GAP_SECONDS)
         finally:
             self.ringing = None
-            speaker.watching_taps = False
             speaker.set_volume(volume_before)
         self.after_ringing(item)
 

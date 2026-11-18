@@ -6,6 +6,7 @@ import os
 import re
 import threading
 import time
+from collections import deque
 import numpy
 import openwakeword.utils
 import pvrecorder
@@ -28,7 +29,11 @@ FIRST_WAIT_SECONDS = 6  # After "Hey John", how long to wait for you to start ta
 MAX_RECORD_SECONDS = 15
 SPEAKER_QUIET_TIMEOUT = 120  # The longest John waits for the speaker to finish before listening for a follow-up
 STOP_WORDS = {"stop", "cancel", "never mind", "nevermind", "nothing", "that's all", "thanks", "thank you"}
-SNOOZE_WORDS = {"snooze", "snooze it", "snooze that", "snooze the alarm", "snooze the timer"}
+LEAD_IN_FRAMES = 6  # Audio kept from just before speech is noticed in a ringing gap, so a short "stop" isn't clipped
+RING_COMMAND_SECONDS = 2.5  # How long a command in a ringing gap can take
+NUMBER_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9,
+                "ten": 10, "eleven": 11, "twelve": 12, "fifteen": 15, "twenty": 20, "thirty": 30, "forty": 40,
+                "forty-five": 45, "forty five": 45, "fifty": 50, "sixty": 60}
 ANSWER_TIMEOUT_SECONDS = 180
 THINKING_AFTER_SECONDS = 2.5  # Play the thinking sound if Claude takes longer than this
 WAKE_PHRASE = re.compile(r"\b(hey|hi|okay),?\s+(john|jarvis)\b[,.!?]*", re.IGNORECASE)
@@ -37,6 +42,22 @@ log = logging.getLogger(__name__)
 # What was said without the wake phrase, which sometimes ends up in the recording ("What time is it? Hey John")
 def without_wake_phrase(heard):
     return " ".join(WAKE_PHRASE.sub(" ", heard).split()).strip(" ,")
+
+# How many minutes were asked for, e.g. "snooze for two minutes" or "snooze 10 min" (None if no number was said)
+def spoken_minutes(words):
+    digits = re.search(r"(\d+)\s*(minute|min)", words)
+    named = [value for name, value in NUMBER_WORDS.items() if re.search(rf"\b{name}\s+minute", words)]
+
+    # Digits first, then numbers in words, then "half an hour" and "an hour"
+    if digits:
+        return int(digits.group(1))
+    elif named:
+        return max(named)
+    elif "half an hour" in words:
+        return 30
+    elif re.search(r"\ban hour\b", words):
+        return 60
+    return None
 
 # What's missing before John can run, as a list of problems; empty when ready
 def missing_setup(settings, secrets):
@@ -85,20 +106,28 @@ class John:
             log.error("Hey John couldn't start: %s", error)
             return
         log.info("Hey John is listening on %s: say \"%s\"", self.recorder.selected_device, self.phrase)
+        self.gap_speech = VAD()  # Its own detector, for "stop" between bursts of ringing
+        recent = deque(maxlen=LEAD_IN_FRAMES)
         self.recorder.start()
 
         # Wait for the wake word, then hold a conversation; problems are logged and listening carries on
         while True:
             # Keep listening even if one conversation fails
             try:
-                scores = self.wake_word.predict(numpy.array(self.recorder.read(), dtype=numpy.int16))
+                frame = self.recorder.read()
+                recent.append(frame)
+                scores = self.wake_word.predict(numpy.array(frame, dtype=numpy.int16))
 
-                # "Hey John" heard: talk, then clear the wake word's memory of the audio so it doesn't fire twice
+                # "Hey John" heard: talk, then clear the wake word's memory of the audio so it doesn't fire twice;
+                # while something rings, a voice in the gap between bursts may be a plain "stop"
                 if max(scores.values()) >= self.threshold:
                     log.info("Heard the wake word (score %.2f)", max(scores.values()))
                     self.wake_word.reset()
                     self.talk()
                     self.wake_word.reset()
+                elif self.voice_in_ringing_gap(frame):
+                    self.ring_command(list(recent))
+                    recent.clear()
             except Exception as error:
                 log.error("Hey John had a problem: %s", error)
                 play_sound(self.announcer, "error")
@@ -140,13 +169,8 @@ class John:
             words = heard.lower().strip(" .!?,")
             ringing = timers.scheduler and timers.scheduler.ringing
 
-            # Snooze or stop what's ringing, or end on "never mind", without asking Claude ("snooze for 2 minutes"
-            # goes to Claude, which knows how long)
-            if ringing and words in SNOOZE_WORDS:
-                timers.scheduler.snooze()
-                return
-            elif ringing and (words in STOP_WORDS or "stop" in words or words.endswith("off")):
-                timers.scheduler.stop()
+            # Snooze or stop what's ringing, or end on "never mind", without asking Claude
+            if ringing and self.handle_ring_words(words):
                 return
             elif not heard or words in STOP_WORDS:
                 return
@@ -158,6 +182,42 @@ class John:
             self.wait_for_quiet_speaker()
             self.recorder.start()
             wait_seconds = self.follow_up_seconds
+
+    # True if something is ringing, the speaker is in a quiet gap between bursts, and this moment sounds like a voice
+    def voice_in_ringing_gap(self, frame):
+        # Only between bursts of ringing; the detector starts fresh for each gap
+        if not (timers.scheduler and timers.scheduler.ringing) or self.announcer.busy():
+            self.gap_speech.reset_states()
+            return False
+        return float(self.gap_speech.predict(numpy.array(frame, dtype=numpy.int16))) >= self.speech_chance
+
+    # A voice was heard while something rings: record the few words (with the moment before), and stop or snooze if
+    # that's what was said; anything else is ignored
+    def ring_command(self, lead_in):
+        timers.scheduler.paused.set()  # No burst starts over the words
+
+        # Ringing carries on afterwards unless the words stopped it
+        try:
+            samples = self.record(RING_COMMAND_SECONDS, lead_in=lead_in)
+            words = without_wake_phrase(self.transcribe(samples)).lower().strip(" .!?,") if samples else ""
+            log.info("Heard while ringing: %r", words)
+
+            # Words that aren't stop or snooze don't end the ringing
+            if not self.handle_ring_words(words):
+                log.info("That wasn't stop or snooze, so it keeps ringing")
+        finally:
+            timers.scheduler.paused.clear()
+
+    # Stop or snooze what's ringing if the words say so ("stop", "turn it off", "snooze for 5 minutes"); returns True
+    # if they did
+    def handle_ring_words(self, words):
+        # Snooze (for as long as said), stop, or neither
+        if "snooze" in words:
+            return timers.scheduler.snooze(spoken_minutes(words) or timers.SNOOZE_MINUTES)
+        elif words in STOP_WORDS or "stop" in words or words.endswith("off") or "enough" in words:
+            return timers.scheduler.stop()
+        else:
+            return False
 
     # Wait until the speaker has finished everything queued (like a briefing a tool started), so John doesn't hear it
     # and answer the speaker instead of you
@@ -187,10 +247,11 @@ class John:
 
     # Record from the microphone until speech ends; returns the samples, or [] if nobody spoke within wait_seconds.
     # The speech detector judges each moment, so quiet words count and beeps, alarms and background noise don't.
-    def record(self, wait_seconds):
+    # lead_in is audio already heard, where speech has started.
+    def record(self, wait_seconds, lead_in=None):
         self.speech.reset_states()
-        recorded = []
-        speech_seconds = 0.0
+        recorded = list(lead_in or [])
+        speech_seconds = MIN_SPEECH_SECONDS if lead_in else 0.0
         quiet_seconds = 0.0
         best_chance = 0.0
         started = time.time()

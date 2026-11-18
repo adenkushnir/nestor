@@ -198,11 +198,10 @@ Music and lights are coming in later milestones.
 
 ### Timers and alarms
 
-Timers and alarms ring on the speaker in bursts: an alarm tone and a spoken line ("Your pasta timer is done.", "It's
-7 AM. Gym."), then a few seconds' gap, so John can hear you. While it's ringing:
-- **"Hey John, stop":** stops it.
-- **"Hey John, snooze":** rings again in 9 minutes, or as long as you say ("snooze for 2 minutes").
-- **Tap the top of the speaker:** stops it too.
+Timers and alarms ring on the speaker in bursts of the alarm tone with a few seconds' gap, so John can hear you. The
+first burst also says what's ringing ("Your pasta timer is done.", "It's 7 AM. Gym."). While it's ringing:
+- **"Stop":** stops it. There's no need for "Hey John" first while something rings, but "Hey John, stop" works too.
+- **"Snooze":** rings again in 9 minutes, or as long as you say ("snooze for 2 minutes").
 
 They ring at `alarm_volume` (75% unless set in `config.yaml`). Alarms ring up to 5 minutes and timers up to 1
 minute if nobody stops them. They ring even in the sleeping period.

@@ -76,7 +76,6 @@ class Announcer:
         self.quiet_hours = QuietHours(settings.get("quiet_hours", ""))
         self.held_lock = threading.Lock()
         self.jobs = queue.Queue()
-        self.tapped_at = 0.0  # When someone last tapped the speaker to stop what was playing (time.time())
         self.playing = False  # True while a batch is being played
         threading.Thread(target=self.run, name="announcer", daemon=True).start()
         threading.Thread(target=self.release_held, name="quiet-hours", daemon=True).start()
@@ -201,8 +200,8 @@ class Announcer:
                     done.set()
 
     # Play a list of messages and sounds: make the audio first, then the chime (if wanted), each item in turn, and
-    # restore the speaker. A message is text; a sound is {"sound": file name, "seconds": length}. A tap on the speaker
-    # or interrupt() ends the batch early.
+    # restore the speaker. A message is text; a sound is {"sound": file name, "seconds": length}. interrupt() ends the
+    # batch early.
     def announce(self, items, wants_chime=True, volume=None):
         # An empty batch has nothing to say
         if not items:
@@ -223,7 +222,7 @@ class Announcer:
                 self.speaker.play_and_wait(self.media_url(self.chime_file), "audio/wav",
                                            expected_seconds=chime.CHIME_SECONDS)
 
-            # Play each sound or message in turn, stopping if someone taps the speaker or John cuts in
+            # Play each sound or message in turn, stopping if John cuts in
             for item in audio:
                 # Sounds are short WAVs timed by their known length; messages are speech
                 if "sound" in item:
@@ -233,11 +232,8 @@ class Announcer:
                     log.info("Speaking: %s", item["text"])
                     result = self.speaker.play_and_wait(self.media_url(item["speech"]), "audio/mpeg")
 
-                # A tap is remembered (it stops a ringing alarm); either way the rest of the batch is skipped
-                if result == "tapped":
-                    self.tapped_at = time.time()
-                    break
-                elif result == "interrupted":
+                # Once John cuts in, the rest of the batch is skipped
+                if result == "interrupted":
                     break
         finally:
             self.speaker.restore(saved, restore_volume=volume is not None)
