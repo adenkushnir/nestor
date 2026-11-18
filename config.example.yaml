@@ -34,9 +34,11 @@ event_heads_up_minutes: 10
 john: true
 # Your name, so John knows who he's talking to (empty = "the user")
 john_owner_name: ""
-# The trained "Hey John" openWakeWord model, in the project folder. Until it exists, say "Hey Jarvis" instead.
+# John listens for the words "Hey John" (or a request ending in ", John"), checked by this small speech-to-text model
+john_wake_whisper: "tiny.en"
+# Optional: a trained "Hey John" openWakeWord model in the project folder, used instead of listening for the words
 john_wake_word: "hey_john.onnx"
-# 0.0 to 1.0: lower hears "Hey John" more easily, but also wakes up by mistake more often
+# 0.0 to 1.0, only for a trained model: lower wakes more easily, but also by mistake more often
 john_wake_threshold: 0.5
 # Part of the microphone's name to use (e.g. "USB"); empty = the computer's default microphone
 microphone: ""

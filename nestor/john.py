@@ -1,6 +1,7 @@
-# Hey John: listens on the microphone for "Hey John" (openWakeWord), records until you stop talking (a speech detector
-# tells voices from noise and beeps), turns it into text on this computer (faster-whisper), asks the brain, and speaks
-# the answer, then listens a few seconds for a follow-up
+# Hey John: listens on the microphone for "Hey John" (the words, checked by a tiny Whisper model whenever the speech
+# detector hears a short phrase, or a trained openWakeWord model if there is one), records until you stop talking,
+# turns it into text on this computer (faster-whisper), asks the brain, and speaks the answer, then listens a few
+# seconds for a follow-up. "Hey John, what time is it?" can be said in one breath.
 import logging
 import os
 import re
@@ -13,6 +14,7 @@ import pvrecorder
 from faster_whisper import WhisperModel
 from openwakeword.model import Model as WakeWordModel
 from openwakeword.vad import VAD
+from nestor import routines
 from nestor import timers
 from nestor.brain import Brain
 from nestor.config import PROJECT_DIR
@@ -22,7 +24,8 @@ from nestor.sounds import play_sound
 from nestor.trains import RailData
 SAMPLE_RATE = 16000  # openWakeWord and Whisper both work at 16 kHz
 FRAME_SECONDS = FRAME_LENGTH / SAMPLE_RATE
-FALLBACK_WAKE_WORD = "hey_jarvis"  # openWakeWord's built-in model, used until the "Hey John" model is trained
+BASE_MODELS = ["hey_jarvis"]  # Fetching any built-in model also brings openWakeWord's shared audio and speech models
+WAKE_PHRASE_SECONDS = 8  # The longest phrase checked for "Hey John" (long enough for a command in the same breath)
 SILENCE_SECONDS = 0.8  # This long without speech after speaking ends the recording
 MIN_SPEECH_SECONDS = 0.08  # One frame the detector is sure is a voice: enough for "no" or "stop"
 FIRST_WAIT_SECONDS = 6  # After "Hey John", how long to wait for you to start talking
@@ -36,12 +39,48 @@ NUMBER_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, 
                 "forty-five": 45, "forty five": 45, "fifty": 50, "sixty": 60}
 ANSWER_TIMEOUT_SECONDS = 180
 THINKING_AFTER_SECONDS = 2.5  # Play the thinking sound if Claude takes longer than this
-WAKE_PHRASE = re.compile(r"\b(hey|hi|okay),?\s+(john|jarvis)\b[,.!?]*", re.IGNORECASE)
+WAKE_PHRASE = re.compile(r"\b(hey|hi|okay|ok),?\s+(john|jon|jarvis)\b[,.!?]*", re.IGNORECASE)
+# "Hey John" at the start of a phrase, with at most one word before it (like "um")
+WAKE_START = re.compile(r"^\W*(?:\w+\W+)?(hey|hi|okay|ok)\W+(john|jon)\b\W*", re.IGNORECASE)
+# A request ending in ", John" (the comma is how speech-to-text writes talking to John, not about him)
+WAKE_END = re.compile(r"^\W*(\w.*?)\s*,\s*(john|jon)\W*$", re.IGNORECASE)
+# Morning and night greetings, which wake John even without a comma ("goodnight John")
+GREETING_END = re.compile(r"^\W*((?:good\s*)?(?:morning|night)|start (?:my|the) (?:day|morning))\W+(john|jon)\W*$",
+                          re.IGNORECASE)
+MAX_REQUEST_WORDS = 15  # Longer phrases ending in ", John" are probably talk, not a request
+MORNING = re.compile(r"^(good )?morning|start (my|the) (day|morning)|i'?m up$")
+NIGHT = re.compile(r"^(good ?night|night|going to bed)$")
 log = logging.getLogger(__name__)
 
 # What was said without the wake phrase, which sometimes ends up in the recording ("What time is it? Hey John")
 def without_wake_phrase(heard):
     return " ".join(WAKE_PHRASE.sub(" ", heard).split()).strip(" ,")
+
+# If John was called, what was asked ("" if nothing more was said); None if he wasn't. He's called by "Hey John" at
+# the start (allowing one word before it, like "um"), by a short request ending in ", John", or by "good morning John"
+# / "goodnight John".
+def after_wake_words(heard):
+    start = WAKE_START.search(heard)
+    end = WAKE_END.search(heard) or GREETING_END.search(heard)
+
+    # "Hey John" first, then a request or greeting ending with John
+    if start:
+        return heard[start.end():].strip()
+    elif end and len(end.group(1).split()) <= MAX_REQUEST_WORDS:
+        return end.group(1).strip()
+    return None
+
+# The routine some words ask for straight away, with no need for Claude: "start_my_day" for "good morning" or
+# "start my day", "goodnight" for "goodnight" or "night"; None for anything else
+def routine_for(words):
+    words = " ".join(re.sub(r"[^\w\s']", " ", words.lower()).split())
+
+    # Morning, night, or neither
+    if MORNING.fullmatch(words):
+        return "start_my_day"
+    elif NIGHT.fullmatch(words):
+        return "goodnight"
+    return None
 
 # How many minutes were asked for, e.g. "snooze for two minutes" or "snooze 10 min" (None if no number was said)
 def spoken_minutes(words):
@@ -68,11 +107,10 @@ def missing_setup(settings, secrets):
 def wake_word_path(settings):
     return os.path.join(PROJECT_DIR, settings.get("john_wake_word", "hey_john.onnx"))
 
-# The wake word model to load and the phrase that wakes it: the trained "Hey John" file if it's there, otherwise
-# openWakeWord's built-in "Hey Jarvis", so John can be used before his own model is trained
-def wake_word_choice(settings):
+# The trained "Hey John" model to use, or None to listen for the words instead (no training needed)
+def wake_word_model(settings):
     path = wake_word_path(settings)
-    return (path, "Hey John") if os.path.exists(path) else (FALLBACK_WAKE_WORD, "Hey Jarvis")
+    return path if os.path.exists(path) else None
 
 # The Hey John listener, running in the background for the life of the service
 class John:
@@ -89,11 +127,14 @@ class John:
     def run(self):
         # Anything that stops John from starting is logged; the rest of Nestor keeps running
         try:
-            model, self.phrase = wake_word_choice(self.settings)
-            openwakeword.utils.download_models([FALLBACK_WAKE_WORD])  # The shared audio models (only the first time)
-            self.wake_word = WakeWordModel(wakeword_models=[model], inference_framework="onnx")
+            model = wake_word_model(self.settings)
+            openwakeword.utils.download_models(BASE_MODELS)  # The shared audio and speech models (only the first time)
+            self.wake_word = WakeWordModel(wakeword_models=[model], inference_framework="onnx") if model else None
             self.threshold = float(self.settings.get("john_wake_threshold", 0.5))
             self.speech = VAD()
+            self.wake_speech = VAD()  # Its own detector, for noticing phrases that might start with "Hey John"
+            self.quick_whisper = None if model else WhisperModel(self.settings.get("john_wake_whisper", "tiny.en"),
+                                                                 device="cpu", compute_type="int8")
             self.recorder = pvrecorder.PvRecorder(frame_length=FRAME_LENGTH,
                                                   device_index=find_microphone(self.settings.get("microphone", "")))
             log.info("Loading speech-to-text (%s); the first time downloads it",
@@ -105,7 +146,8 @@ class John:
         except Exception as error:
             log.error("Hey John couldn't start: %s", error)
             return
-        log.info("Hey John is listening on %s: say \"%s\"", self.recorder.selected_device, self.phrase)
+        log.info("Hey John is listening on %s (%s)", self.recorder.selected_device,
+                 "trained wake word model" if self.wake_word else "listening for the words")
         self.gap_speech = VAD()  # Its own detector, for "stop" between bursts of ringing
         recent = deque(maxlen=LEAD_IN_FRAMES)
         self.recorder.start()
@@ -116,17 +158,14 @@ class John:
             try:
                 frame = self.recorder.read()
                 recent.append(frame)
-                scores = self.wake_word.predict(numpy.array(frame, dtype=numpy.int16))
 
-                # "Hey John" heard: talk, then clear the wake word's memory of the audio so it doesn't fire twice;
-                # while something rings, a voice in the gap between bursts may be a plain "stop"
-                if max(scores.values()) >= self.threshold:
-                    log.info("Heard the wake word (score %.2f)", max(scores.values()))
-                    self.wake_word.reset()
-                    self.talk()
-                    self.wake_word.reset()
-                elif self.voice_in_ringing_gap(frame):
+                # While something rings, a voice in the gap between bursts may be a plain "stop"; otherwise "Hey John"
+                # starts a conversation (with whatever was said in the same breath)
+                if self.voice_in_ringing_gap(frame):
                     self.ring_command(list(recent))
+                    recent.clear()
+                elif self.heard_wake_word(frame, recent):
+                    self.talk(self.first_words)
                     recent.clear()
             except Exception as error:
                 log.error("Hey John had a problem: %s", error)
@@ -137,8 +176,43 @@ class John:
             if not self.recorder.is_recording:
                 self.recorder.start()
 
-    # Hold a conversation, pausing any ringing timer or alarm meanwhile so John can be heard
-    def talk(self):
+    # True if "Hey John" was just heard. With a trained model, it scores each moment; otherwise, whenever the speech
+    # detector hears a phrase (and the speaker isn't talking), a tiny Whisper model checks whether it starts with "Hey
+    # John". Anything said after it in the same breath is kept in self.first_words.
+    def heard_wake_word(self, frame, recent):
+        self.first_words = None
+
+        # A trained model decides by itself; the words need a voice first, and never the speaker's own
+        if self.wake_word:
+            score = max(self.wake_word.predict(numpy.array(frame, dtype=numpy.int16)).values())
+
+            # Clear the model's memory of the audio, so it doesn't fire twice
+            if score >= self.threshold:
+                log.info("Heard the wake word (score %.2f)", score)
+                self.wake_word.reset()
+            return score >= self.threshold
+        elif self.announcer.busy():
+            self.wake_speech.reset_states()
+            return False
+        elif float(self.wake_speech.predict(numpy.array(frame, dtype=numpy.int16))) < self.speech_chance:
+            return False
+        self.wake_speech.reset_states()
+        samples = self.record(1.0, lead_in=list(recent), max_seconds=WAKE_PHRASE_SECONDS, quietly=True)
+        rest = after_wake_words(self.transcribe(samples, self.quick_whisper)) if samples else None
+
+        # Not "Hey John": ignored (and not logged, as it's just people talking)
+        if rest is None:
+            return False
+
+        # More was said in the same breath: hear it properly with the bigger model
+        if rest:
+            self.first_words = after_wake_words(self.transcribe(samples)) or without_wake_phrase(rest) or None
+        log.info("Heard \"Hey John\"%s", f" and: {self.first_words!r}" if self.first_words else "")
+        return True
+
+    # Hold a conversation, pausing any ringing timer or alarm meanwhile so John can be heard; first_words is a
+    # question already asked in the same breath as "Hey John"
+    def talk(self, first_words=None):
         ringing = timers.scheduler and timers.scheduler.ringing
 
         # Ringing is cut off at once and waits while John talks; it carries on afterwards unless it was stopped
@@ -148,20 +222,28 @@ class John:
 
         # The ringing always resumes, even if the conversation fails
         try:
-            self.conversation()
+            self.conversation(first_words)
         finally:
             # Let ringing carry on
             if timers.scheduler:
                 timers.scheduler.paused.clear()
 
-    # One conversation: listen, answer, and keep going while follow-ups come within a few seconds
-    def conversation(self):
-        play_sound(self.announcer, "listening")
+    # One conversation: listen (unless the question came with "Hey John"), answer, and keep going while follow-ups come
+    # within a few seconds
+    def conversation(self, first_words=None):
+        heard = first_words
         wait_seconds = FIRST_WAIT_SECONDS
+
+        # Asked in one breath: a "got it" tone and straight to the answer; otherwise the listening tone
+        if heard:
+            self.recorder.stop()
+            play_sound(self.announcer, "done")
+        else:
+            play_sound(self.announcer, "listening")
 
         # Each round is one thing said and John's answer
         while True:
-            heard = self.listen(wait_seconds)
+            heard = heard or self.listen(wait_seconds)
 
             # Nobody spoke: the conversation is over
             if heard is None:
@@ -169,10 +251,16 @@ class John:
             words = heard.lower().strip(" .!?,")
             ringing = timers.scheduler and timers.scheduler.ringing
 
-            # Snooze or stop what's ringing, or end on "never mind", without asking Claude
+            # Snooze or stop what's ringing, end on "never mind", or run good morning / goodnight, without asking Claude
             if ringing and self.handle_ring_words(words):
                 return
             elif not heard or words in STOP_WORDS:
+                return
+            elif routine_for(heard) == "start_my_day":
+                routines.start_my_day(self.announcer, self.settings)
+                return
+            elif routine_for(heard) == "goodnight":
+                routines.goodnight(self.announcer, self.settings)
                 return
             answer = self.answer(heard)
 
@@ -182,6 +270,7 @@ class John:
             self.wait_for_quiet_speaker()
             self.recorder.start()
             wait_seconds = self.follow_up_seconds
+            heard = None
 
     # True if something is ringing, the speaker is in a quiet gap between bursts, and this moment sounds like a voice
     def voice_in_ringing_gap(self, frame):
@@ -247,8 +336,9 @@ class John:
 
     # Record from the microphone until speech ends; returns the samples, or [] if nobody spoke within wait_seconds.
     # The speech detector judges each moment, so quiet words count and beeps, alarms and background noise don't.
-    # lead_in is audio already heard, where speech has started.
-    def record(self, wait_seconds, lead_in=None):
+    # lead_in is audio already heard, where speech has started; quietly leaves out the log line (for phrases that may
+    # just be people talking).
+    def record(self, wait_seconds, lead_in=None, max_seconds=MAX_RECORD_SECONDS, quietly=False):
         self.speech.reset_states()
         recorded = list(lead_in or [])
         speech_seconds = MIN_SPEECH_SECONDS if lead_in else 0.0
@@ -257,7 +347,7 @@ class John:
         started = time.time()
 
         # Read frames until speech has been followed by a pause, or the time runs out
-        while time.time() - started < MAX_RECORD_SECONDS:
+        while time.time() - started < max_seconds:
             frame = self.recorder.read()
             recorded.append(frame)
             chance = float(self.speech.predict(numpy.array(frame, dtype=numpy.int16)))
@@ -277,13 +367,17 @@ class John:
                 log.info("No speech heard (the most voice-like moment scored %.2f; speech needs %.2f)", best_chance,
                          self.speech_chance)
                 return []
-        log.info("Recorded %.1f s (speech %.1f s)", len(recorded) * FRAME_SECONDS, speech_seconds)
+
+        # Phrases that may just be people talking aren't logged
+        if not quietly:
+            log.info("Recorded %.1f s (speech %.1f s)", len(recorded) * FRAME_SECONDS, speech_seconds)
         return [sample for frame in recorded for sample in frame]
 
-    # Turn recorded samples into text with faster-whisper ("" if nothing was said)
-    def transcribe(self, samples):
+    # Turn recorded samples into text with faster-whisper ("" if nothing was said); model is the speech-to-text model
+    # to use (the big one unless given)
+    def transcribe(self, samples, model=None):
         audio = numpy.array(samples, dtype=numpy.float32) / 32768.0
-        segments, info = self.whisper.transcribe(audio, language="en", beam_size=1, vad_filter=True)
+        segments, info = (model or self.whisper).transcribe(audio, language="en", beam_size=1, vad_filter=True)
         return " ".join(segment.text.strip() for segment in segments).strip()
 
     # Ask the brain, playing the thinking sound if it takes a while, and the error sound if it fails
