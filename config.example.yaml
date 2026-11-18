@@ -7,8 +7,6 @@ speaker_host: ""
 voice: "en-US-EmmaMultilingualNeural"
 # Speaking speed, e.g. "+10%" or "-5%"
 voice_rate: "+0%"
-# Volume for announcements, 0.0 to 1.0 (the previous volume is restored afterwards)
-announce_volume: 0.5
 # Play a short chime before each announcement
 chime: true
 # Port of Nestor's web server (the speaker fetches its audio from here)
@@ -42,8 +40,9 @@ john_wake_word: "hey_john.onnx"
 john_wake_threshold: 0.5
 # Part of the microphone's name to use (e.g. "USB"); empty = the computer's default microphone
 microphone: ""
-# How loud you must be for John to count it as speech (python -m nestor --mic-test suggests a value)
-john_speech_level: 120
+# How sure the speech detector must be that a sound is a voice, 0.0 to 1.0 (lower hears quieter speech;
+# python -m nestor --mic-test shows its scores)
+john_speech_threshold: 0.4
 # Speech-to-text model: "base.en" is faster, "small.en" is more accurate (downloaded the first time)
 whisper_model: "small.en"
 # Claude model and effort for John's answers ("low" answers fastest)

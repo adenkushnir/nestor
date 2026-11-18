@@ -60,7 +60,8 @@ curl -X POST http://localhost:8765/speak -H "Content-Type: application/json" -d 
 Add `"wait": true` to get the reply only after the message has been spoken. Note that anyone on your home Wi-Fi can
 reach this API.
 
-Nestor plays a chime, speaks at `announce_volume`, then puts the volume back. Audio that was playing in the speaker's
+Nestor plays a chime and speaks at the speaker's own volume (it never changes the volume for announcements, since
+every change makes the speaker's sound; only alarms turn it up). Audio that was playing in the speaker's
 built-in media player resumes. Music from apps like Spotify stops and has to be restarted by hand.
 
 ## Alerts
@@ -252,7 +253,7 @@ John's settings in `config.yaml`:
 
 | Setting | What it does |
 |---|---|
-| `john_speech_level` | How loud speech must be; `python -m nestor --mic-test` shows your levels and suggests one |
+| `john_speech_threshold` | How sure the speech detector must be that it hears a voice; `python -m nestor --mic-test` shows its scores |
 | `john_wake_threshold` | 0.0 to 1.0: lower hears "Hey John" more easily, but also wakes up by mistake more often |
 | `whisper_model` | `small.en` (more accurate) or `base.en` (faster) |
 | `john_model`, `john_effort` | The Claude model and effort |

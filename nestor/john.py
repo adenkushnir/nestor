@@ -1,5 +1,6 @@
-# Hey John: listens on the microphone for "Hey John" (openWakeWord), records until you stop talking, turns it into text
-# on this computer (faster-whisper), asks the brain, and speaks the answer, then listens a few seconds for a follow-up
+# Hey John: listens on the microphone for "Hey John" (openWakeWord), records until you stop talking (a speech detector
+# tells voices from noise and beeps), turns it into text on this computer (faster-whisper), asks the brain, and speaks
+# the answer, then listens a few seconds for a follow-up
 import logging
 import os
 import re
@@ -10,22 +11,22 @@ import openwakeword.utils
 import pvrecorder
 from faster_whisper import WhisperModel
 from openwakeword.model import Model as WakeWordModel
+from openwakeword.vad import VAD
 from nestor import timers
 from nestor.brain import Brain
 from nestor.config import PROJECT_DIR
 from nestor.microphone import FRAME_LENGTH
-from nestor.microphone import MIN_SPEECH_LEVEL
 from nestor.microphone import find_microphone
-from nestor.microphone import loudness
 from nestor.sounds import play_sound
 from nestor.trains import RailData
 SAMPLE_RATE = 16000  # openWakeWord and Whisper both work at 16 kHz
+FRAME_SECONDS = FRAME_LENGTH / SAMPLE_RATE
 FALLBACK_WAKE_WORD = "hey_jarvis"  # openWakeWord's built-in model, used until the "Hey John" model is trained
-SPEECH_OVER_NOISE = 2.5  # Speech must be this many times louder than the room's background
-SILENCE_SECONDS = 0.9  # This much quiet after speaking ends the recording
-MIN_SPEECH_SECONDS = 0.25  # Enough for "no" or "stop"; anything shorter is a click, not speech
+SILENCE_SECONDS = 0.8  # This long without speech after speaking ends the recording
+MIN_SPEECH_SECONDS = 0.08  # One frame the detector is sure is a voice: enough for "no" or "stop"
 FIRST_WAIT_SECONDS = 6  # After "Hey John", how long to wait for you to start talking
 MAX_RECORD_SECONDS = 15
+SPEAKER_QUIET_TIMEOUT = 120  # The longest John waits for the speaker to finish before listening for a follow-up
 STOP_WORDS = {"stop", "cancel", "never mind", "nevermind", "nothing", "that's all", "thanks", "thank you"}
 SNOOZE_WORDS = {"snooze", "snooze it", "snooze that", "snooze the alarm", "snooze the timer"}
 ANSWER_TIMEOUT_SECONDS = 180
@@ -60,11 +61,10 @@ class John:
         self.settings = settings
         self.secrets = secrets
         self.follow_up_seconds = float(settings.get("john_follow_up_seconds", 5))
-        self.speech_level = float(settings.get("john_speech_level", MIN_SPEECH_LEVEL))
-        self.noise = self.speech_level / SPEECH_OVER_NOISE
+        self.speech_chance = float(settings.get("john_speech_threshold", 0.4))
         threading.Thread(target=self.run, name="hey-john", daemon=True).start()
 
-    # Set up the wake word, microphone, speech-to-text and brain, then wait for "Hey John" forever
+    # Set up the wake word, speech detector, microphone, speech-to-text and brain, then wait for "Hey John" forever
     def run(self):
         # Anything that stops John from starting is logged; the rest of Nestor keeps running
         try:
@@ -72,6 +72,7 @@ class John:
             openwakeword.utils.download_models([FALLBACK_WAKE_WORD])  # The shared audio models (only the first time)
             self.wake_word = WakeWordModel(wakeword_models=[model], inference_framework="onnx")
             self.threshold = float(self.settings.get("john_wake_threshold", 0.5))
+            self.speech = VAD()
             self.recorder = pvrecorder.PvRecorder(frame_length=FRAME_LENGTH,
                                                   device_index=find_microphone(self.settings.get("microphone", "")))
             log.info("Loading speech-to-text (%s); the first time downloads it",
@@ -90,10 +91,7 @@ class John:
         while True:
             # Keep listening even if one conversation fails
             try:
-                frame = self.recorder.read()
-                self.learn_noise(frame)
-
-                scores = self.wake_word.predict(numpy.array(frame, dtype=numpy.int16))
+                scores = self.wake_word.predict(numpy.array(self.recorder.read(), dtype=numpy.int16))
 
                 # "Hey John" heard: talk, then clear the wake word's memory of the audio so it doesn't fire twice
                 if max(scores.values()) >= self.threshold:
@@ -109,10 +107,6 @@ class John:
             # Make sure the microphone is running again for the next "Hey John"
             if not self.recorder.is_recording:
                 self.recorder.start()
-
-    # Keep a slow average of the room's background loudness, so speech is judged against it
-    def learn_noise(self, frame):
-        self.noise = 0.98 * self.noise + 0.02 * loudness(frame)
 
     # Hold a conversation, pausing any ringing timer or alarm meanwhile so John can be heard
     def talk(self):
@@ -161,10 +155,20 @@ class John:
             # Speak the answer (some tools, like goodnight, speak for themselves) and wait until it's done
             if answer:
                 self.announcer.say(answer, with_chime=False).wait(ANSWER_TIMEOUT_SECONDS)
+            self.wait_for_quiet_speaker()
             self.recorder.start()
             wait_seconds = self.follow_up_seconds
 
-    # Listen until something is said within wait_seconds: a recording that only caught a beep or a noise is followed
+    # Wait until the speaker has finished everything queued (like a briefing a tool started), so John doesn't hear it
+    # and answer the speaker instead of you
+    def wait_for_quiet_speaker(self):
+        gives_up = time.time() + SPEAKER_QUIET_TIMEOUT
+
+        # Check a few times a second
+        while self.announcer.busy() and time.time() < gives_up:
+            time.sleep(0.2)
+
+    # Listen until something is said within wait_seconds: a recording that caught a voice but no words is followed
     # by another while there's time. Returns the words ("" if nothing was understood), or None if nobody spoke.
     def listen(self, wait_seconds):
         ends = time.time() + wait_seconds
@@ -181,40 +185,38 @@ class John:
                 log.info("Heard: %r", heard)
                 return heard if samples else None
 
-    # Record from the microphone until speech ends; returns the samples, or [] if nobody spoke within wait_seconds
+    # Record from the microphone until speech ends; returns the samples, or [] if nobody spoke within wait_seconds.
+    # The speech detector judges each moment, so quiet words count and beeps, alarms and background noise don't.
     def record(self, wait_seconds):
-        frame_seconds = FRAME_LENGTH / SAMPLE_RATE
-        threshold = max(self.speech_level, self.noise * SPEECH_OVER_NOISE)
+        self.speech.reset_states()
         recorded = []
         speech_seconds = 0.0
         quiet_seconds = 0.0
-        loudest = 0.0
+        best_chance = 0.0
         started = time.time()
 
-        # Read frames until enough speech has been followed by quiet, or the time runs out
+        # Read frames until speech has been followed by a pause, or the time runs out
         while time.time() - started < MAX_RECORD_SECONDS:
             frame = self.recorder.read()
             recorded.append(frame)
-            level = loudness(frame)
-            loudest = max(loudest, level)
+            chance = float(self.speech.predict(numpy.array(frame, dtype=numpy.int16)))
+            best_chance = max(best_chance, chance)
 
-            # Loud frames count as speech, quiet ones as a pause
-            if level >= threshold:
-                speech_seconds += frame_seconds
+            # Frames the detector thinks are a voice count as speech, the rest as a pause
+            if chance >= self.speech_chance:
+                speech_seconds += FRAME_SECONDS
                 quiet_seconds = 0.0
             else:
-                quiet_seconds += frame_seconds
+                quiet_seconds += FRAME_SECONDS
 
-            # Done once real speech is followed by a pause; give up if nobody starts talking in time
+            # Done once speech is followed by a pause; give up if nobody starts talking in time
             if speech_seconds >= MIN_SPEECH_SECONDS and quiet_seconds >= SILENCE_SECONDS:
                 break
             elif speech_seconds < MIN_SPEECH_SECONDS and time.time() - started > wait_seconds:
-                log.info("No speech heard: the loudest sound was %.0f, speech needs %.0f (background %.0f). If you "
-                         "spoke, lower john_speech_level in config.yaml (python -m nestor --mic-test shows your "
-                         "levels)", loudest, threshold, self.noise)
+                log.info("No speech heard (the most voice-like moment scored %.2f; speech needs %.2f)", best_chance,
+                         self.speech_chance)
                 return []
-        log.info("Recorded %.1f s (speech %.1f s, loudest %.0f, needed %.0f)", len(recorded) * frame_seconds,
-                 speech_seconds, loudest, threshold)
+        log.info("Recorded %.1f s (speech %.1f s)", len(recorded) * FRAME_SECONDS, speech_seconds)
         return [sample for frame in recorded for sample in frame]
 
     # Turn recorded samples into text with faster-whisper ("" if nothing was said)

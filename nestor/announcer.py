@@ -72,18 +72,18 @@ class Announcer:
         self.base_url = base_url
         self.voice = settings.get("voice", "en-US-EmmaMultilingualNeural")
         self.voice_rate = settings.get("voice_rate", "+0%")
-        self.announce_volume = float(settings.get("announce_volume", 0.5))
         self.chime_file = chime.ensure_chime() if settings.get("chime", True) else None
         self.quiet_hours = QuietHours(settings.get("quiet_hours", ""))
         self.held_lock = threading.Lock()
         self.jobs = queue.Queue()
         self.tapped_at = 0.0  # When someone last tapped the speaker to stop what was playing (time.time())
+        self.playing = False  # True while a batch is being played
         threading.Thread(target=self.run, name="announcer", daemon=True).start()
         threading.Thread(target=self.release_held, name="quiet-hours", daemon=True).start()
 
     # Queue one message, or a list to play together, and return an event set once spoken (or failed);
-    # with_chime=False leaves out the chime (John's answers come straight after his own sounds), and volume (0.0 to
-    # 1.0) replaces announce_volume (alarms ring louder)
+    # with_chime=False leaves out the chime (John's answers come straight after his own sounds). Nestor speaks at the
+    # speaker's own volume (every change makes the speaker's sound); volume (0.0 to 1.0) is only for special cases.
     def say(self, texts, with_chime=True, volume=None):
         # A single message is a list of one
         if isinstance(texts, str):
@@ -99,6 +99,10 @@ class Announcer:
         done = threading.Event()
         self.jobs.put(([{"sound": file_name, "seconds": seconds}], done, False, volume))
         return done
+
+    # True while something is playing or waiting to play (John doesn't listen then, so he doesn't hear the speaker)
+    def busy(self):
+        return self.playing or not self.jobs.empty()
 
     # Cut short whatever is playing and drop what's waiting to play (used when John is called over a ringing alarm)
     def interrupt(self):
@@ -179,8 +183,8 @@ class Announcer:
             # Pick up any other messages that arrived meanwhile, so the music is interrupted only once
             while not self.jobs.empty():
                 batch.append(self.jobs.get_nowait())
-
             volumes = [volume for items, done, wants_chime, volume in batch if volume is not None]
+            self.playing = True
 
             # A failed batch is logged and the worker carries on with the next one
             try:
@@ -190,6 +194,8 @@ class Announcer:
             except Exception as error:
                 log.error("Announcement failed: %s", error)
             finally:
+                self.playing = False
+
                 # Tell everyone waiting on these messages that they are finished
                 for items, done, wants_chime, volume in batch:
                     done.set()
@@ -206,9 +212,11 @@ class Announcer:
         saved = self.speaker.snapshot()
         self.speaker.interrupted.clear()
 
-        # Whatever happens while playing, the volume and earlier media get restored
+        # Whatever happens while playing, the volume (if changed) and earlier media get restored
         try:
-            self.speaker.set_volume(self.announce_volume if volume is None else volume)
+            # The volume only changes when asked for, since each change makes the speaker's sound
+            if volume is not None:
+                self.speaker.set_volume(volume)
 
             # The chime is optional in config.yaml, and left out for John's sounds and answers
             if self.chime_file and wants_chime:
@@ -226,13 +234,13 @@ class Announcer:
                     result = self.speaker.play_and_wait(self.media_url(item["speech"]), "audio/mpeg")
 
                 # A tap is remembered (it stops a ringing alarm); either way the rest of the batch is skipped
-                if result == "paused":
+                if result == "tapped":
                     self.tapped_at = time.time()
                     break
                 elif result == "interrupted":
                     break
         finally:
-            self.speaker.restore(saved)
+            self.speaker.restore(saved, restore_volume=volume is not None)
 
     # Address the speaker uses to fetch a file from Nestor's web server
     def media_url(self, file_name):

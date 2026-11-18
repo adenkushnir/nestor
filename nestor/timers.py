@@ -190,23 +190,32 @@ class TimerScheduler:
         tone, tone_seconds = ensure_sound("alarm")
         limit = ALARM_RING_SECONDS if item["kind"] == "alarm" else TIMER_RING_SECONDS
         started = time.time()
+        speaker = self.announcer.speaker
+        volume_before = speaker.volume()
         log.info("Ringing: %s", ring_line(item, datetime.datetime.now()))
+        speaker.watching_taps = True
+        speaker.set_volume(self.volume)  # Once for the whole ringing, since every change makes the speaker's sound
 
-        # Burst, gap, burst... (waiting while John is talking)
-        while self.stop_request is None and time.time() - started < limit:
-            # Hold off while John is in a conversation
-            if self.paused.is_set():
-                time.sleep(0.2)
-                continue
-            burst_started = time.time()
-            self.announcer.sound(tone, tone_seconds, volume=self.volume)
-            self.announcer.say(ring_line(item, datetime.datetime.now()), with_chime=False, volume=self.volume).wait(60)
+        # Ring until stopped, and always put the volume back afterwards
+        try:
+            # Burst, gap, burst... (waiting while John is talking)
+            while self.stop_request is None and time.time() - started < limit:
+                # Hold off while John is in a conversation
+                if self.paused.is_set():
+                    time.sleep(0.2)
+                    continue
+                burst_started = time.time()
+                self.announcer.sound(tone, tone_seconds)
+                self.announcer.say(ring_line(item, datetime.datetime.now()), with_chime=False).wait(60)
 
-            # A tap on the speaker during the burst stops the ringing
-            if self.announcer.tapped_at >= burst_started:
-                self.stop_request = "stop"
-            self.wait_for_stop(GAP_SECONDS)
-        self.ringing = None
+                # A tap on the speaker during the burst stops the ringing
+                if self.announcer.tapped_at >= burst_started:
+                    self.stop_request = "stop"
+                self.wait_for_stop(GAP_SECONDS)
+        finally:
+            self.ringing = None
+            speaker.watching_taps = False
+            speaker.set_volume(volume_before)
         self.after_ringing(item)
 
     # Wait up to the given seconds, ending early if the ringing is stopped

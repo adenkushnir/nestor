@@ -52,10 +52,8 @@ def tool_definitions():
              "starts the sleeping period until morning. It speaks for itself, so add nothing after it."),
         tool("briefing", "Get the briefing as text, to answer questions about the weather, the day or tomorrow.",
              {"day": {"type": "string", "enum": ["today", "tomorrow"]}}),
-        tool("set_volume", "Set the speaker's volume (music and everything else), or just how loud Nestor and "
-             "John speak.",
-             {"target": {"type": "string", "enum": ["speaker", "announcements"]},
-              "percent": {"type": "integer", "description": "0 to 100"}}),
+        tool("set_volume", "Set the speaker's volume (music, John and everything else).",
+             {"percent": {"type": "integer", "description": "0 to 100"}}),
         tool("recent_alerts", "The latest alerts Nestor announced or held (Datebook, reminders, GitHub...), newest "
              "first.",
              {"count": {"type": "integer", "description": "How many, 1 to 10"}}),
@@ -158,7 +156,7 @@ class JohnTools:
         elif name == "briefing":
             return build_briefing(self.settings, day=arguments["day"])["text"]
         elif name == "set_volume":
-            return self.set_volume(arguments["target"], arguments["percent"])
+            return self.set_volume(arguments["percent"])
         elif name == "recent_alerts":
             count = max(1, min(10, arguments["count"]))
             return json.dumps(list(reversed(read_history()))[:count])
@@ -193,16 +191,11 @@ class JohnTools:
                         has_calendar=state["has_calendar"], connected=state["connected"])
         return json.dumps(overview)
 
-    # Change the speaker's own volume, or the volume Nestor speaks at (until Nestor restarts)
-    def set_volume(self, target, percent):
+    # Change the speaker's volume (Nestor and John speak at it too)
+    def set_volume(self, percent):
         level = max(0, min(100, percent)) / 100
-
-        # The speaker's volume, or just announcements
-        if target == "speaker":
-            self.announcer.speaker.set_volume(level)
-        else:
-            self.announcer.announce_volume = level
-        return json.dumps({"target": target, "percent": round(level * 100)})
+        self.announcer.speaker.set_volume(level)
+        return json.dumps({"percent": round(level * 100)})
 
     # The next trains for the saved trip (Datebook's, else train_from and train_to in config.yaml) or the stations
     # asked about, from NJ Transit's live board

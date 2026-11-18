@@ -9,6 +9,7 @@ from pychromecast.controllers.media import MEDIA_PLAYER_STATE_PAUSED
 from pychromecast.controllers.media import MEDIA_PLAYER_STATE_PLAYING
 DEFAULT_MEDIA_RECEIVER = "CC1AD845"  # Cast app id of the built-in media player Nestor uses
 ACTIVE_STATES = (MEDIA_PLAYER_STATE_PLAYING, MEDIA_PLAYER_STATE_BUFFERING)
+TAP_REASONS = ("CANCELLED", "INTERRUPTED")  # How the speaker says playback was stopped on it, rather than finished
 log = logging.getLogger(__name__)
 
 # Print every Cast device on the network (used once to find the speaker's name)
@@ -62,6 +63,7 @@ class Speaker:
         self.host = self.cast.cast_info.host
         self.play_counter = 0
         self.interrupted = threading.Event()  # Set to cut short what's playing now
+        self.watching_taps = False  # While True (an alarm is ringing), every change the speaker reports is logged
         log.info("Connected to %s at %s", self.name, self.host)
 
     # Set the speaker volume (0.0 to 1.0)
@@ -83,10 +85,17 @@ class Speaker:
                                "paused": media_status.player_state == MEDIA_PLAYER_STATE_PAUSED}
         return saved
 
-    # Put the volume back and resume earlier media where possible
-    def restore(self, saved):
-        self.set_volume(saved["volume"])
+    # The speaker's volume right now (0.0 to 1.0)
+    def volume(self):
+        return self.cast.status.volume_level
+
+    # Resume earlier media where possible, and put the volume back if it was changed
+    def restore(self, saved, restore_volume=False):
         resume = saved["resume"]
+
+        # Only a changed volume is put back, since every change makes the speaker's sound
+        if restore_volume:
+            self.set_volume(saved["volume"])
 
         # Restart the earlier media at the position it was interrupted
         if resume:
@@ -100,8 +109,7 @@ class Speaker:
 
     # Play one audio URL and block until it has finished (or a timeout passes). expected_seconds is for clips the
     # speaker never reports as finished (Google Home Speaker hangs ~30 s after WAV files): done once that long played.
-    # Returns "done", "paused" (someone tapped the speaker, which then stops it) or "interrupted" (interrupt() was
-    # called).
+    # Returns "done", "tapped" (someone paused or stopped it on the speaker) or "interrupted" (interrupt() was called).
     def play_and_wait(self, url, content_type, expected_seconds=None, max_seconds=180):
         # A unique query string means the status for this play can't be mixed up with an earlier one
         self.play_counter += 1
@@ -112,12 +120,19 @@ class Speaker:
         start_deadline = time.time() + 15
         end_deadline = time.time() + max_seconds
         playing_since = None
+        last_report = None
 
         # Poll the player: wait for this URL to start, then for it to finish
         while time.time() < end_deadline:
             media_status = media.status
             is_this_media = media_status.content_id == unique_url
             player_state = media_status.player_state
+            report = (player_state, media_status.idle_reason, self.cast.app_id, is_this_media)
+
+            # While an alarm rings, log everything the speaker reports, to learn what a tap looks like
+            if self.watching_taps and report != last_report:
+                log.info("Speaker reports: state %s, idle reason %s, app %s, our audio %s", *report)
+                last_report = report
 
             # Note when playback begins, stop early if interrupted or tapped, and stop waiting once it is over
             if self.interrupted.is_set():
@@ -125,10 +140,11 @@ class Speaker:
                 return "interrupted"
             elif is_this_media and player_state in ACTIVE_STATES and playing_since is None:
                 playing_since = time.time()
-            elif is_this_media and player_state == MEDIA_PLAYER_STATE_PAUSED and playing_since:
-                log.info("Someone tapped the speaker to stop it")
+            elif playing_since and (self.cast.app_id != DEFAULT_MEDIA_RECEIVER or (is_this_media and (
+                    player_state == MEDIA_PLAYER_STATE_PAUSED or media_status.idle_reason in TAP_REASONS))):
+                log.info("Someone stopped the speaker (state %s, idle reason %s, app %s)", *report[:3])
                 media.stop()
-                return "paused"
+                return "tapped"
             elif is_this_media and player_state == MEDIA_PLAYER_STATE_IDLE and media_status.idle_reason == "ERROR":
                 raise RuntimeError(f"Speaker could not play {url}")
             elif is_this_media and player_state == MEDIA_PLAYER_STATE_IDLE and (
