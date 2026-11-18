@@ -175,7 +175,14 @@ alias briefing='"/c/Vibes/Google Home/.venv/Scripts/python" "/c/Vibes/Google Hom
 
 ## Hey John
 
-John is Nestor's voice assistant. Say **"Hey John"** and ask anything. He answers out loud on the speaker:
+John is Nestor's voice assistant. Call him in any of these ways, and he answers out loud on the speaker:
+- **"Hey John"**, wait for the tone, then ask;
+- in one breath: **"Hey John, what time is it?"**;
+- with his name at the end: **"What time is it, John?"**, **"Set a timer for 5 minutes, John"**, **"Goodnight
+  John"**, **"Good morning John"**.
+
+"Good morning / start my day" and "goodnight" run straight away without asking Claude. Things he can do:
+
 
 - "What's on my calendar tomorrow?" or "Did my package come?" (from Datebook)
 - "Add dinner with Sam Friday at 7 to Datebook" (your phone shows Datebook's prompt to confirm)
@@ -217,8 +224,11 @@ tokens a day. Your trip is Datebook's saved trip once Datebook is linked; until 
 `train_to` in `config.yaml` to the stations' two-letter codes, e.g. `"NB"` and `"NY"`.
 
 **How it works:**
-- **Wake word:** [openWakeWord](https://github.com/dscripka/openWakeWord) (open source, no account) hears "Hey
-  John" on the PC's microphone.
+- **Hearing his name:** whenever a speech detector ([Silero](https://github.com/snakers4/silero-vad), via
+  [openWakeWord](https://github.com/dscripka/openWakeWord)) hears a short phrase, a tiny Whisper model checks whether
+  it starts with "Hey John" or ends in ", John". There's no training. Talking *about* someone named John ("I'll call
+  John") doesn't wake him, because speech-to-text only writes the comma when you're talking *to* John. A trained
+  openWakeWord model (`hey_john.onnx` in the project folder) is used instead if you have one.
 - **Speech to text:** [faster-whisper](https://github.com/SYSTRAN/faster-whisper) turns what you say into text, on
   the PC.
 - **The answer:** Claude (Opus 5.5 at low effort) answers, using Nestor's tools.
@@ -238,10 +248,8 @@ looks up for the answer.
    NJT_PASSWORD=its password
    ```
 
-3. **Train the "Hey John" wake word** (free, about an hour, mostly waiting) with openWakeWord's
-   [training notebook](https://colab.research.google.com/drive/1q1oe2zOyZp7UsB3jJiQ1IFn8z5YfjwEb?usp=sharing) on
-   Google Colab. Enter `hey john` as the wake word, run it, and download the `.onnx` model. Save it in the project
-   folder as `hey_john.onnx`. **Until then, John answers to "Hey Jarvis"**, openWakeWord's built-in model.
+3. Nothing to train: John listens for the words. (If you ever train an openWakeWord model for "Hey John", save it
+   in the project folder as `hey_john.onnx` and it's used instead.)
 
 4. In `config.yaml`, set `john_owner_name` to your name. Once a USB microphone is plugged in, set `microphone` to part
    of its name; `python -m nestor` logs which microphone John is using.
@@ -253,7 +261,8 @@ John's settings in `config.yaml`:
 | Setting | What it does |
 |---|---|
 | `john_speech_threshold` | How sure the speech detector must be that it hears a voice; `python -m nestor --mic-test` shows its scores |
-| `john_wake_threshold` | 0.0 to 1.0: lower hears "Hey John" more easily, but also wakes up by mistake more often |
+| `john_wake_whisper` | The small model that checks phrases for "Hey John" (`tiny.en`, downloaded the first time) |
+| `john_wake_threshold` | Only with a trained `hey_john.onnx`: lower wakes more easily, but also by mistake |
 | `whisper_model` | `small.en` (more accurate) or `base.en` (faster) |
 | `john_model`, `john_effort` | The Claude model and effort |
 | `john_follow_up_seconds` | How long he listens for a follow-up |
