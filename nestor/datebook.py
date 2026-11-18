@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import logging
 import os
+import re
 import secrets
 import threading
 from nestor.config import DATA_DIR
@@ -23,6 +24,10 @@ ACTIONS = ("add", "ignore", "done", "new_plan")
 SNAPSHOT_PARTS = ("waiting", "lists", "notes", "reminders", "trip", "events")
 EVENT_FIELDS = ("id", "title", "start", "end", "all_day", "place", "calendar", "from", "bring", "confirmation",
                 "track_url", "leave_by", "travel")
+# A Canvas title from Datebook: the assignment, " · ", then the course code (school:subject:course:section) and its
+# registrar name, e.g. "Final Group Presentation · 01:713:202:01 INTRO ORGANIZ LDRSHP"
+COURSE = re.compile(r"^(.*?)\s*·\s*(\d{2}:\d{3}:\d{3})(?::[\d&]+)?\s+(.+?)\s*$")
+CODE = re.compile(r"\d{2}:\d{3}:\d{3}")  # A course code key in class_names
 log = logging.getLogger(__name__)
 last_seen = None  # When a paired phone last called Nestor
 pairing_lock = threading.Lock()
@@ -188,6 +193,60 @@ def read_moment(text):
     except ValueError:
         return None
 
+# A title said aloud: "Unit #11 Homework (Project #10) – Replacing an Area" becomes "Unit 11 Homework, Project 10,
+# Replacing an Area" (no #, *, brackets or dashes)
+def tidy_title(title):
+    text = re.sub(r"[#*]", "", str(title))
+    text = re.sub(r"\s*[–—]\s*|\s+-\s+", ", ", text)
+    text = re.sub(r"\s*\(([^)]*)\)\s*", r", \1, ", text)
+    return re.sub(r"\s*,[\s,]*", ", ", " ".join(text.split())).strip(" ,")
+
+# A class's registrar name made sayable when it has no nickname: "MOVIE VFX ONLINE" becomes "Movie VFX"
+def tidy_class(name):
+    words = [word for word in str(name).split() if word.upper() not in ("ONLINE", "HYBRID", "REMOTE")]
+    return " ".join(word.capitalize() if len(word) > 3 else word for word in words)
+
+# A registrar name made comparable: lower case, without "ONLINE" and the like
+def class_key(name):
+    return " ".join(word for word in str(name).lower().split() if word not in ("online", "hybrid", "remote"))
+
+# Nicknames by registrar name ({"intermed macro anals": "Macro"}), so a calendar event titled with just the class's
+# registrar name can be said by its nickname: from class_names entries keyed by registrar name, and from the course
+# codes and names Datebook's assignments carry
+def class_lookup(state, class_names=None):
+    class_names = class_names or {}
+    lookup = {class_key(key): nickname for key, nickname in class_names.items() if not CODE.fullmatch(str(key))}
+    assignments = state.get("lists", {}).get("assignments") if isinstance(state.get("lists"), dict) else None
+
+    # Each assignment's course code and registrar name
+    for item in assignments or []:
+        match = COURSE.match(str(item.get("title", ""))) if isinstance(item, dict) else None
+
+        # Only Canvas assignments name a class
+        if match:
+            lookup.setdefault(class_key(match.group(3)), class_names.get(match.group(2)) or tidy_class(match.group(3)))
+    return lookup
+
+# Split a Canvas title from Datebook into what to say and the class's nickname: "Unit #11 Homework – Replacing an
+# Area · 07:211:250:90 MOVIE VFX ONLINE" gives ("Unit 11 Homework, Replacing an Area", "Movie VFX"). class_names maps
+# course codes ("07:211:250") to nicknames; lookup (from class_lookup) turns a title that is just a registrar name
+# into the nickname. Other titles come back tidied, with no class.
+def split_class(title, class_names=None, lookup=None):
+    match = COURSE.match(str(title))
+
+    # A Canvas title, a class's registrar name, or anything else
+    if match:
+        return tidy_title(match.group(1)), (class_names or {}).get(match.group(2)) or tidy_class(match.group(3))
+    elif class_key(title) in (lookup or {}):
+        return lookup[class_key(title)], ""
+    else:
+        return tidy_title(title), ""
+
+# A copy of a snapshot item (an assignment, event or plan) with what to say: title_spoken and class
+def with_spoken_title(item, class_names=None, lookup=None):
+    title_spoken, class_name = split_class(item.get("title", ""), class_names, lookup)
+    return dict(item, title_spoken=title_spoken, **{"class": class_name})
+
 # A calendar event from the snapshot with every field present (empty when Datebook didn't send it) and its start and
 # end read as date-times; None if it has no title or readable start
 def clean_event(event):
@@ -225,11 +284,14 @@ def events_on(state, day):
     return sorted(found, key=lambda event: (not event["all_day"], event["begins"]))
 
 # What Datebook says about one day, for the briefing: calendar events that day, waiting plans (all of them, soonest
-# first), bills and assignments due that day, and Datebook's reminders that day
-def datebook_day(day, now=None):
+# first), bills and assignments due that day, and Datebook's reminders that day. Events, plans and due items carry
+# title_spoken and class (from class_names, the nicknames for course codes).
+def datebook_day(day, now=None, class_names=None):
     state = read_state(now)
     lists = state["lists"] if isinstance(state["lists"], dict) else {}
-    waiting = [plan for plan in state["waiting"] if isinstance(plan, dict) and plan.get("title")]
+    lookup = class_lookup(state, class_names)
+    waiting = [with_spoken_title(plan, class_names, lookup) for plan in state["waiting"]
+               if isinstance(plan, dict) and plan.get("title")]
     waiting.sort(key=lambda plan: str(plan.get("start") or "9999"))
     due = []
 
@@ -239,7 +301,8 @@ def datebook_day(day, now=None):
         for item in lists.get(kind) or []:
             # Items without a readable due date are skipped
             if isinstance(item, dict) and item.get("title") and str(item.get("due") or "")[:10] == day.isoformat():
-                due.append({"kind": kind[:-1], "title": item["title"], "due": item["due"]})
+                due.append(with_spoken_title({"kind": kind[:-1], "title": item["title"], "due": item["due"]},
+                                             class_names, lookup))
     reminders = []
 
     # Datebook's reminders set for that day ("time" is empty for a reminder with no time of day)
@@ -248,8 +311,8 @@ def datebook_day(day, now=None):
         if isinstance(reminder, dict) and reminder.get("text") and \
                 str(reminder.get("at") or "")[:10] == day.isoformat():
             reminders.append({"time": str(reminder["at"])[11:16], "text": reminder["text"]})
-    events = [{key: value for key, value in event.items() if key not in ("begins", "ends")}
-              for event in events_on(state, day)]
+    events = [with_spoken_title({key: value for key, value in event.items() if key not in ("begins", "ends")},
+                                class_names, lookup) for event in events_on(state, day)]
     return {"connected": state["connected"], "stale": state["stale"], "updated": state.get("updated"),
             "phone_home": state["phone_home"], "has_calendar": state["has_calendar"], "events": events,
             "waiting": waiting, "due": due,

@@ -183,13 +183,33 @@ class JohnTools:
         else:
             raise ValueError(f"no tool called {name}")
 
-    # Datebook's copy, cut down to what answers need
+    # Datebook's copy, cut down to what answers need, with Canvas titles as they should be said (no course codes) and
+    # each class's nickname in "class"
     def datebook_overview(self):
         state = datebook.read_state()
-        overview = {part: state.get(part) for part in ("events", "waiting", "lists", "notes", "reminders", "trip")}
+        lists = dict(state["lists"]) if isinstance(state["lists"], dict) else {}
+        lookup = datebook.class_lookup(state, self.settings.get("class_names"))
+        lists["assignments"] = self.spoken_items(lists.get("assignments"), lookup)
+        overview = {part: state.get(part) for part in ("notes", "reminders", "trip")}
+        overview.update(events=self.spoken_items(state.get("events"), lookup),
+                        waiting=self.spoken_items(state.get("waiting"), lookup), lists=lists)
         overview.update(phone_home=state["phone_home"], copy_is_old=state["stale"], updated=state.get("updated"),
                         has_calendar=state["has_calendar"], connected=state["connected"])
         return json.dumps(overview)
+
+    # Snapshot items with their title as it should be said and their class nickname (if they're from Canvas); lookup
+    # is from datebook.class_lookup
+    def spoken_items(self, items, lookup=None):
+        spoken = []
+
+        # Each readable item, with its title replaced by the spoken one
+        for item in items or []:
+            # Skip anything that isn't an item
+            if isinstance(item, dict):
+                said = datebook.with_spoken_title(item, self.settings.get("class_names"), lookup)
+                said["title"] = said.pop("title_spoken")
+                spoken.append(said)
+        return spoken
 
     # Change the speaker's volume (Nestor and John speak at it too)
     def set_volume(self, percent):

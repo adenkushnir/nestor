@@ -158,7 +158,9 @@ work without a restart:
 The briefing gives:
 - the date, the weather (Open-Meteo, free, no key), and sunrise and sunset;
 - what's still on your calendar today (the first 5, from Datebook) and when to leave for the next thing;
-- today's reminders (Nestor's and Datebook's), and bills and assignments due;
+- today's reminders (Nestor's and Datebook's), and bills and assignments due, grouped by class ("for Movie VFX, Unit
+  11 Discussion Forum and Unit 11 Homework"). Canvas course codes are never read out; set short class names in
+  `class_names` in `config.yaml`;
 - the plans waiting in Datebook;
 - GitHub news from overnight.
 

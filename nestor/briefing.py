@@ -60,7 +60,7 @@ def build_briefing(settings, now=None, day="today"):
 
     # Datebook's part is left out, not fatal, if its snapshot can't be read
     try:
-        data["datebook"] = datebook_day(date, now)
+        data["datebook"] = datebook_day(date, now, settings.get("class_names"))
     except Exception as error:
         log.warning("No Datebook part for the briefing: %s", error)
     data["lines"] = spoken_lines(data, now)
@@ -123,15 +123,21 @@ def spoken_place(event):
         return ""
     return place
 
+# What to call an event, plan or due item: its spoken title, and its class if it has one ("Final Group Presentation
+# for Leadership")
+def spoken_name(item):
+    title = item.get("title_spoken") or item["title"]
+    return f"{title} for {item['class']}" if item.get("class") else title
+
 # An event said aloud: "CS lecture at 10 AM", "lunch with Sam at 12:30 PM at Luigi's", "Soccer tournament all day"
 def spoken_event(event):
     place = spoken_place(event)
 
     # All-day events have no time of day
     if event["all_day"]:
-        words = f"{event['title']} all day"
+        words = f"{spoken_name(event)} all day"
     else:
-        words = f"{event['title']} at {spoken_clock(read_moment(event['start']).time())}"
+        words = f"{spoken_name(event)} at {spoken_clock(read_moment(event['start']).time())}"
     return f"{words} at {place}" if place else words
 
 # True once a timed event is over (all-day events last the whole day)
@@ -202,7 +208,7 @@ def event_lines(datebook, now, day):
     for event in events:
         # Only events with a bring list
         if spoken_bring(event["bring"]):
-            lines.append(f"Bring {spoken_bring(event['bring'])} for {event['title']}.")
+            lines.append(f"Bring {spoken_bring(event['bring'])} for {spoken_name(event)}.")
     return lines
 
 # Nestor's and Datebook's reminders for the day together, timed ones in order and untimed ones last
@@ -224,13 +230,28 @@ def spoken_plan(plan, today):
 
     # Plans without a readable start are just their title
     if not start:
-        return plan["title"]
+        return spoken_name(plan)
     when = spoken_day(start.date(), today)
 
     # All-day plans and plans with only a date have no time of day
     if "T" in str(plan["start"]) and not plan.get("all_day"):
         when += f" at {spoken_clock(start.time())}"
-    return f"{plan['title']} {when}"
+    return f"{spoken_name(plan)} {when}"
+
+# Everything due on a day in one sentence, grouped by class: "Due today: the electric bill; for Movie VFX, Unit 11
+# Discussion Forum and Unit 11 Homework; for Leadership, Final Group Presentation."
+def due_line(due, day):
+    loose = [item["title_spoken"] for item in due if not item["class"]]
+    by_class = {}
+
+    # Gather each class's items, in the order they come
+    for item in due:
+        # Bills and other items without a class were gathered above
+        if item["class"]:
+            by_class.setdefault(item["class"], []).append(item["title_spoken"])
+    parts = ([spoken_list(loose)] if loose else []) + [f"for {name}, {spoken_list(titles)}"
+                                                        for name, titles in by_class.items()]
+    return f"Due {day}: " + "; ".join(parts) + "."
 
 # What Datebook adds: bills and assignments due that day, and the plans waiting on the phone to be added
 def datebook_lines(datebook, now, day):
@@ -239,9 +260,9 @@ def datebook_lines(datebook, now, day):
         return []
     lines = []
 
-    # Bills and assignments due that day
+    # Bills and assignments due that day, grouped by class
     if datebook["due"]:
-        lines.append(f"Due {day}: {spoken_list([item['title'] for item in datebook['due']])}.")
+        lines.append(due_line(datebook["due"], day))
     waiting = datebook["waiting"]
 
     # Plans waiting to be added, the soonest few by name

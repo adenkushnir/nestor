@@ -52,6 +52,10 @@ john_model: "claude-opus-5-5"
 john_effort: "low"
 # How many seconds John keeps listening for a follow-up without "Hey John"
 john_follow_up_seconds: 5
+# Short names for your classes, said instead of Canvas's course codes. Keys are the course code without the section
+# (school:subject:course), e.g. "07:211:250": "Movie VFX", or a registrar name as calendar events show it, e.g.
+# "INTERMED MACRO ANALS": "Macro". Classes without one get a cleaned-up registrar name.
+class_names: {}
 # Your usual NJ Transit trip, as two-letter station codes (e.g. "NB" and "NY"); Datebook's saved trip wins once
 # it's linked. Live trains need NJT_USERNAME and NJT_PASSWORD (your NJ Transit developer account) in .env.
 train_from: ""
