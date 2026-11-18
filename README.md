@@ -158,7 +158,9 @@ work without a restart:
 The briefing gives:
 - the date, the weather (Open-Meteo, free, no key), and sunrise and sunset;
 - what's still on your calendar today (the first 5, from Datebook) and when to leave for the next thing;
-- today's reminders (Nestor's and Datebook's), and bills and assignments due;
+- today's reminders (Nestor's and Datebook's), and bills and assignments due, grouped by class ("for Movie VFX, Unit
+  11 Discussion Forum and Unit 11 Homework"). Canvas course codes are never read out; set short class names in
+  `class_names` in `config.yaml`;
 - the plans waiting in Datebook;
 - GitHub news from overnight.
 
@@ -201,7 +203,7 @@ end. You'll hear these sounds:
 - soft taps while Claude is thinking;
 - a low tone if something went wrong.
 
-Music and lights are coming in later milestones.
+Music is coming in a later milestone. For lights, see [Govee lights](#govee-lights).
 
 ### Timers and alarms
 
@@ -269,6 +271,51 @@ John's settings in `config.yaml`:
 
 John's memory is in `data/memory.json`. The sleeping period that "goodnight" and "start my day" change is in
 `data/sleep.json`.
+
+## Govee lights
+
+Nestor controls Govee lights over the home Wi-Fi with Govee's LAN API. It's local and instant, with no Govee
+account. In the Govee Home app, open each light, then its settings, and switch on **LAN Control**. Nestor finds the
+lights by itself when it starts. Turn them off for Nestor with `govee: false` in `config.yaml`.
+
+**What the lights do by themselves:**
+- **Alerts:** a white flash when an alert is spoken. A Datebook leave-by gets an amber pulse, and "leave now" gets
+  red flashes. Afterwards the lights go back to exactly what they were showing, mood included.
+- **John:** they glow Datebook's aqua while John listens and thinks.
+- **Good morning:** a 2-minute sunrise, from dim candle orange to bright daylight, while the day ahead is read.
+- **Goodnight:** a 1-minute fade to off.
+
+**Groups:** name groups of lights in `config.yaml` by their device ids (Nestor logs them when it finds the lights):
+
+```yaml
+light_groups:
+  "wall": ["2F:3A:..."]
+  "living room": ["04:DC:...", "04:5B:..."]
+```
+
+"The wall" or "the living room lights" then means just that group; "lights" alone means all of them. Setting one
+group during a mood takes only that group out of it.
+
+**By voice:**
+- "Lights to blue, John", "the wall at 30 percent", "living room lights off", "focus mode".
+- **Moods, as a conversation:** only when you ask for lighting. Just saying what you're doing doesn't start one.
+  1. "Hey John, I want lights for a movie I'm watching."
+  2. He asks a question or two: what kind, cozy or lively. "A comedy, cozy."
+  3. He shows one look at a time on the lights, each with a name he makes up ("This is Popcorn Sunset: warm amber,
+     slowly breathing"), and asks what you think. He waits a little longer for your answer after showing a look.
+  4. Say "next", "go back", "that one", or tweak it: "warmer", "slower", "more purple", "dimmer".
+  5. He remembers what you liked for next time and offers to save it, e.g. "save it as comedy night".
+  6. Later: "Comedy night, John", "What moods have I saved?", "Delete the horror one".
+
+**Effects** are made by Nestor, by changing the colours a few times a second:
+- steady;
+- breathe (slowly brightening and dimming);
+- drift (blending between colours);
+- flicker (like a candle);
+- lightning (dim, with white flashes);
+- party (hopping between colours).
+
+Each comes slow, medium or fast. Saved moods are in `data/moods.json`.
 
 ## API
 

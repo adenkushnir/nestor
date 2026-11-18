@@ -14,10 +14,12 @@ LATE_LIMIT = datetime.timedelta(minutes=10)  # Heads-ups missed by more than thi
 CHECK_SECONDS = 15
 log = logging.getLogger(__name__)
 
-# The heads-up sentence for an event: "In 10 minutes: CS lecture."
-def heads_up_text(event, minutes):
-    title = event["title"].rstrip(".!?")
-    return f"In {minutes} minute: {title}." if minutes == 1 else f"In {minutes} minutes: {title}."
+# The heads-up sentence for an event: "In 10 minutes: CS lecture." (Canvas events say their class nickname instead
+# of the course code: "In 10 minutes: Final Group Presentation for Leadership.")
+def heads_up_text(event, minutes, class_names=None, lookup=None):
+    title, class_name = datebook.split_class(event["title"], class_names, lookup)
+    name = (f"{title} for {class_name}" if class_name else title).rstrip(".!?")
+    return f"In {minutes} minute: {name}." if minutes == 1 else f"In {minutes} minutes: {name}."
 
 # The events whose heads-up moment (start minus heads_up) falls after start_check and up to end_check, as
 # (moment, event) pairs; all-day events and events with a Datebook leave-by are left out
@@ -53,6 +55,7 @@ class EventAlerts:
     def __init__(self, announcer, settings):
         self.announcer = announcer
         self.minutes = int(settings.get("event_heads_up_minutes", 10))
+        self.class_names = settings.get("class_names")
         threading.Thread(target=self.run, name="event-alerts", daemon=True).start()
 
     # Background loop: speak the heads-ups that came due since the last check
@@ -83,6 +86,7 @@ class EventAlerts:
 
         # Each due event gets one heads-up; it expires when the event starts, and its key stops repeats
         for moment, event in due_heads_ups(state, last_check, now, datetime.timedelta(minutes=self.minutes)):
-            self.announcer.alert(heads_up_text(event, self.minutes), source="calendar",
+            self.announcer.alert(heads_up_text(event, self.minutes, self.class_names,
+                                               datebook.class_lookup(state, self.class_names)), source="calendar",
                                  expires=event["begins"].isoformat(timespec="seconds"),
                                  key=f"event:{event['id'] or event['title']}:{event['start']}")
