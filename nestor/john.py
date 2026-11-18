@@ -31,6 +31,7 @@ SILENCE_SECONDS = 0.8  # This long without speech after speaking ends the record
 MIN_SPEECH_SECONDS = 0.08  # One frame the detector is sure is a voice: enough for "no" or "stop"
 FIRST_WAIT_SECONDS = 6  # After "Hey John", how long to wait for you to start talking
 MAX_RECORD_SECONDS = 15
+LOOKING_SECONDS = 15  # After showing a look on the lights, how long John waits for what you think of it
 SPEAKER_QUIET_TIMEOUT = 120  # The longest John waits for the speaker to finish before listening for a follow-up
 STOP_WORDS = {"stop", "cancel", "never mind", "nevermind", "nothing", "that's all", "thanks", "thank you"}
 LEAD_IN_FRAMES = 6  # Audio kept from just before speech is noticed in a ringing gap, so a short "stop" isn't clipped
@@ -278,7 +279,8 @@ class John:
                 self.announcer.say(answer, with_chime=False).wait(ANSWER_TIMEOUT_SECONDS)
             self.wait_for_quiet_speaker()
             self.recorder.start()
-            wait_seconds = self.follow_up_seconds
+            wait_seconds = LOOKING_SECONDS if self.brain.tools.showed_look else self.follow_up_seconds
+            self.brain.tools.showed_look = False
             heard = None
 
     # True if something is ringing, the speaker is in a quiet gap between bursts, and this moment sounds like a voice

@@ -37,6 +37,12 @@ GOODNIGHT_SECONDS = 60
 lights = None  # The running GoveeLights, for John, the announcer and the routines
 log = logging.getLogger(__name__)
 
+# A light or group name made comparable: "The Living Room Lights" and "living room" are the same
+def group_key(name):
+    words = [word for word in str(name).lower().replace("-", " ").split() if word not in ("the", "light", "lights",
+                                                                                          "lamp", "lamps", "my")]
+    return " ".join(words)
+
 # Read a colour said or written as a name ("purple"), a hex code ("#ff8800") or "r,g,b"; None if it isn't one
 def parse_color(text):
     text = str(text).strip().lower()
@@ -89,10 +95,13 @@ def mood_frame(mood, t, place, flash=False):
 
 # The lights: commands, moods and signals. Everything does nothing if no lights are found.
 class GoveeLights:
-    # Open the reply port, find the lights in the background, and start the mood player
-    def __init__(self):
+    # Open the reply port, find the lights in the background, and start the mood player. groups names sets of lights
+    # by their Govee device ids, e.g. {"wall": ["2F:3A:..."], "living room": ["04:DC:...", "04:5B:..."]}.
+    def __init__(self, groups=None):
         global lights
         self.devices = read_json(DEVICES_PATH, {})  # IP address: {"sku", "device"}
+        self.groups = {group_key(name): set(ids) for name, ids in (groups or {}).items()}
+        self.held_out = set()  # Lights set on their own while a mood plays on the rest
         self.status = {}  # IP address: what the light last said it shows
         self.status_times = {}
         self.mood = None  # The mood showing now (a dict), or None
@@ -114,11 +123,29 @@ class GoveeLights:
     def send(self, ip, command, data):
         self.socket.sendto(json.dumps({"msg": {"cmd": command, "data": data}}).encode("utf-8"), (ip, COMMAND_PORT))
 
-    # Turn every light on or off
-    def power(self, on):
+    # Turn every light (or just the given IP addresses) on or off
+    def power(self, on, ips=None):
         # Each light
-        for ip in self.devices:
+        for ip in ips if ips is not None else self.devices:
             self.send(ip, "turn", {"value": 1 if on else 0})
+
+    # The IP addresses of the lights a name means: all of them for "all" or "lights", otherwise a group's; raises
+    # ValueError for a name that isn't a group
+    def ips_for(self, name="all"):
+        key = group_key(name)
+
+        # Everything, a group, or a name Nestor doesn't know
+        if key in ("", "all", "everything", "every", "all of"):
+            return set(self.devices)
+        elif key in self.groups:
+            return {ip for ip, info in self.devices.items() if info.get("device") in self.groups[key]}
+        else:
+            known = ", ".join(sorted(self.groups)) or "just all of them"
+            raise ValueError(f"no lights called {name!r}; there's {known}")
+
+    # Whether a name means every light
+    def means_all(self, name):
+        return self.ips_for(name) == set(self.devices)
 
     # Set one light's colour and brightness (white light given as kelvin goes to lights that know it, as a colour
     # to the rest)
@@ -216,47 +243,65 @@ class GoveeLights:
 
     # Show one frame of a mood, sending each light only what changed
     def show_frame(self, mood, t, flash=False):
-        # Each light, at its own place in the effect
+        # Each light, at its own place in the effect (lights set on their own sit it out)
         for place, ip in enumerate(sorted(self.devices)):
             color, brightness = mood_frame(mood, t, place, flash)
 
             # Only changes are sent, to keep Wi-Fi traffic low
-            if self.sent.get(ip) != (color, brightness):
+            if ip not in self.held_out and self.sent.get(ip) != (color, brightness):
                 self.show(ip, color, brightness)
                 self.sent[ip] = (color, brightness)
 
     # Start showing a mood (a dict with name, colors, effect, speed and brightness); John's glow gives way to it
     def set_mood(self, mood):
         self.end_glow(restore=False)
+        self.held_out = set()
         self.power(True)
         self.sent = {}
         self.mood_started = time.time()
         self.mood = dict(mood)
         self.show_frame(self.mood, 0)
 
-    # Set the lights directly (any of: on or off, a colour, white at a colour temperature, a brightness); any mood stops
-    def set_lights(self, on=None, color=None, kelvin=0, brightness=0):
+    # Set lights directly (any of: on or off, a colour, white at a colour temperature, a brightness). which is "all" or
+    # a group: all of them stops any mood; a group is taken out of the mood while the rest carry on.
+    def set_lights(self, on=None, color=None, kelvin=0, brightness=0, which="all"):
+        ips = self.ips_for(which)
         self.end_glow(restore=False)
-        self.mood = None
+
+        # Everything stops the mood; a group just leaves it
+        if ips == set(self.devices):
+            self.mood = None
+            self.held_out = set()
+        else:
+            self.held_out |= ips
 
         # Off is just off; anything else turns them on first
         if on is False:
-            self.power(False)
+            self.power(False, ips)
             return
-        self.power(True)
+        self.power(True, ips)
 
-        # A colour or white, if one was asked for, on every light
+        # A colour or white, if one was asked for
         if color or kelvin:
             # Each light
-            for ip in self.devices:
+            for ip in ips:
                 self.send(ip, "colorwc", {"color": dict(zip("rgb", color or kelvin_color(kelvin))),
                                           "colorTemInKelvin": kelvin if not color else 0})
 
-        # A brightness, if one was asked for, on every light (otherwise each keeps its own)
+        # A brightness, if one was asked for (otherwise each keeps its own)
         if brightness:
             # Each light
-            for ip in self.devices:
+            for ip in ips:
                 self.send(ip, "brightness", {"value": max(1, min(100, brightness))})
+
+    # Tweak the mood that's showing ("warmer", "slower", "dimmer"): changes holds only what changes; returns the new
+    # mood. Raises ValueError if no mood is showing.
+    def adjust_mood(self, changes):
+        # Only a showing mood can be tweaked
+        if not self.mood:
+            raise ValueError("no mood is showing to change")
+        self.set_mood(dict(self.mood, **changes))
+        return self.mood
 
     # Play a short signal on every light, then go back to what was showing; skipped if another signal is playing.
     # frames is a list of (colour, brightness, seconds).

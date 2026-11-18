@@ -285,15 +285,27 @@ lights by itself when it starts. Turn them off for Nestor with `govee: false` in
 - **Good morning:** a 2-minute sunrise, from dim candle orange to bright daylight, while the day ahead is read.
 - **Goodnight:** a 1-minute fade to off.
 
+**Groups:** name groups of lights in `config.yaml` by their device ids (Nestor logs them when it finds the lights):
+
+```yaml
+light_groups:
+  "wall": ["2F:3A:..."]
+  "living room": ["04:DC:...", "04:5B:..."]
+```
+
+"The wall" or "the living room lights" then means just that group; "lights" alone means all of them. Setting one
+group during a mood takes only that group out of it.
+
 **By voice:**
-- "Lights to blue, John", "lights at 30 percent", "lights off", "focus mode".
-- **Moods, as a conversation:**
-  1. "Hey John, I'm watching a movie."
-  2. He asks what kind. "A comedy."
+- "Lights to blue, John", "the wall at 30 percent", "living room lights off", "focus mode".
+- **Moods, as a conversation:** only when you ask for lighting. Just saying what you're doing doesn't start one.
+  1. "Hey John, I want lights for a movie I'm watching."
+  2. He asks a question or two: what kind, cozy or lively. "A comedy, cozy."
   3. He shows one look at a time on the lights, each with a name he makes up ("This is Popcorn Sunset: warm amber,
-     slowly breathing"). Say "next", "go back" or "that one".
-  4. He offers to save a look you like, e.g. "save it as comedy night".
-  5. Later: "Comedy night, John", "What moods have I saved?", "Delete the horror one".
+     slowly breathing"), and asks what you think. He waits a little longer for your answer after showing a look.
+  4. Say "next", "go back", "that one", or tweak it: "warmer", "slower", "more purple", "dimmer".
+  5. He remembers what you liked for next time and offers to save it, e.g. "save it as comedy night".
+  6. Later: "Comedy night, John", "What moods have I saved?", "Delete the horror one".
 
 **Effects** are made by Nestor, by changing the colours a few times a second:
 - steady;
