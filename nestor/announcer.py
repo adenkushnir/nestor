@@ -7,6 +7,7 @@ import queue
 import threading
 import time
 from nestor import chime
+from nestor import govee
 from nestor import tts
 from nestor.config import DATA_DIR
 from nestor.quiet import QuietHours
@@ -134,6 +135,10 @@ class Announcer:
             else:
                 status = "spoken"
                 self.say(text)
+
+                # The lights flash along (white, or amber for a leave-by and red for "leave now")
+                if govee.lights:
+                    govee.lights.alert(text, source, key or "")
             add_to_history(text, source, status, key, expires)
         return status
 

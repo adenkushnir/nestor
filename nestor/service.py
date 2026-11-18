@@ -9,6 +9,7 @@ from nestor.config import load_secrets
 from nestor.discovery import Advertiser
 from nestor.event_alerts import EventAlerts
 from nestor.github_watch import GitHubWatcher
+from nestor.govee import GoveeLights
 from nestor.reminders import ReminderScheduler
 from nestor.timers import TimerScheduler
 from nestor.server import create_app
@@ -50,6 +51,14 @@ class Service:
             ReminderScheduler(self.announcer, settings)
             EventAlerts(self.announcer, settings)
             TimerScheduler(self.announcer, settings)
+
+        # Govee lights, if any answer on the Wi-Fi (their port can only be used by one program at a time)
+        if watchers and settings.get("govee", True):
+            # Nestor runs without lights if their port is taken
+            try:
+                GoveeLights()
+            except OSError as error:
+                log.warning("Govee lights are off: %s", error)
 
         # GitHub alerts can be turned off in config.yaml
         if watchers and settings.get("github_watch", True):

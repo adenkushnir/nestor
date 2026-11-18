@@ -14,6 +14,7 @@ import pvrecorder
 from faster_whisper import WhisperModel
 from openwakeword.model import Model as WakeWordModel
 from openwakeword.vad import VAD
+from nestor import govee
 from nestor import routines
 from nestor import timers
 from nestor.brain import Brain
@@ -220,13 +221,21 @@ class John:
             timers.scheduler.paused.set()
             self.announcer.interrupt()
 
-        # The ringing always resumes, even if the conversation fails
+        # The lights glow aqua while John listens and thinks
+        if govee.lights:
+            govee.lights.start_glow()
+
+        # The ringing always resumes and the glow ends, even if the conversation fails
         try:
             self.conversation(first_words)
         finally:
             # Let ringing carry on
             if timers.scheduler:
                 timers.scheduler.paused.clear()
+
+            # The lights go back to what they showed
+            if govee.lights:
+                govee.lights.end_glow()
 
     # One conversation: listen (unless the question came with "Hey John"), answer, and keep going while follow-ups come
     # within a few seconds

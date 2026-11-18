@@ -60,5 +60,7 @@ class_names: {}
 # it's linked. Live trains need NJT_USERNAME and NJT_PASSWORD (your NJ Transit developer account) in .env.
 train_from: ""
 train_to: ""
+# Govee lights on the home Wi-Fi (switch on "LAN Control" for each light in the Govee Home app)
+govee: true
 # How loud timers and alarms ring, 0.0 to 1.0
 alarm_volume: 0.75

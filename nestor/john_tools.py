@@ -4,6 +4,7 @@
 import datetime
 import json
 from nestor import datebook
+from nestor import govee
 from nestor import memory
 from nestor import reminders
 from nestor import routines
@@ -79,6 +80,26 @@ def tool_definitions():
              {"from_station": {"type": "string", "description": "Station name or code, or empty"},
               "to_station": {"type": "string", "description": "Station name or code, or empty"},
               "reverse": {"type": "boolean", "description": "True for the saved trip's way back"}}),
+        tool("set_lights", "Control the Govee lights directly (all of them): on or off, a colour, white at a colour "
+             "temperature, and/or a brightness. Stops any mood.",
+             {"power": {"type": "string", "enum": ["on", "off", "keep"]},
+              "color": {"type": "string", "description": "A colour name (red, amber, purple...) or #rrggbb; empty "
+                        "for none"},
+              "white_kelvin": {"type": "integer", "description": "White light from 2000 (warm) to 6500 (daylight); "
+                               "0 for none"},
+              "brightness": {"type": "integer", "description": "1 to 100; 0 to keep it as it is"}}),
+        tool("preview_mood", "Show a lighting mood on the lights now: one look with a fun name you made up. Use it in "
+             "the mood conversation, one look at a time.",
+             {"name": {"type": "string", "description": "A fun name, e.g. 'Popcorn Sunset'"},
+              "colors": {"type": "array", "items": {"type": "string"}, "description": "1 to 4 colours (names or "
+                         "#rrggbb)"},
+              "effect": {"type": "string", "enum": list(govee.EFFECTS)},
+              "speed": {"type": "string", "enum": list(govee.SPEEDS)},
+              "brightness": {"type": "integer", "description": "1 to 100"}}),
+        tool("save_mood", "Save the mood showing now under a name, to use again later.", {"name": TEXT}),
+        tool("list_moods", "List the saved moods with their colours and effects."),
+        tool("use_mood", "Show a saved mood by its name.", {"name": TEXT}),
+        tool("delete_mood", "Delete a saved mood by its name.", {"name": TEXT}),
         tool("remember", "Remember a lasting fact about the user, only when asked.", {"fact": TEXT}),
         tool("forget", "Forget remembered facts containing these words, when asked.", {"about": TEXT}),
     ]
@@ -176,6 +197,8 @@ class JohnTools:
             return json.dumps({"done": ringing, "note": "" if ringing else "nothing was ringing"})
         elif name == "next_trains":
             return self.next_trains(arguments["from_station"], arguments["to_station"], arguments["reverse"])
+        elif name in ("set_lights", "preview_mood", "save_mood", "list_moods", "use_mood", "delete_mood"):
+            return self.lights(name, arguments)
         elif name == "remember":
             return json.dumps({"remembered": memory.remember(arguments["fact"])})
         elif name == "forget":
@@ -210,6 +233,46 @@ class JohnTools:
                 said["title"] = said.pop("title_spoken")
                 spoken.append(said)
         return spoken
+
+    # The Govee light tools
+    def lights(self, name, arguments):
+        lights = govee.lights
+
+        # Saved moods are kept even without lights; showing anything needs them
+        if name == "list_moods":
+            return json.dumps([{key: mood[key] for key in ("name", "colors", "effect", "speed")}
+                               for mood in govee.read_moods()])
+        elif name == "delete_mood":
+            return json.dumps({"deleted": govee.delete_mood(arguments["name"])})
+        elif not lights or not lights.devices:
+            raise RuntimeError("no Govee lights found on the Wi-Fi (is LAN Control on in the Govee app?)")
+        elif name == "set_lights":
+            color = govee.parse_color(arguments["color"]) if arguments["color"] else None
+
+            # A colour must be one Nestor knows
+            if arguments["color"] and not color:
+                raise ValueError(f"unknown colour {arguments['color']!r}; use a name or #rrggbb")
+            power = {"on": True, "off": False}.get(arguments["power"])
+            lights.set_lights(power, color, max(0, arguments["white_kelvin"]), max(0, arguments["brightness"]))
+            return json.dumps({"done": True})
+        elif name == "preview_mood":
+            mood = {key: arguments[key] for key in ("name", "colors", "effect", "speed", "brightness")}
+            lights.set_mood(mood)
+            return json.dumps({"showing": mood["name"]})
+        elif name == "save_mood":
+            # Only a mood that's showing can be saved
+            if not lights.mood:
+                raise ValueError("no mood is showing to save")
+            return json.dumps({"saved": govee.save_mood(lights.mood, arguments["name"])["name"]})
+        else:
+            mood = govee.find_mood(arguments["name"])
+
+            # Unknown names get the list back
+            if not mood:
+                raise ValueError(f"no saved mood called {arguments['name']!r}; saved: "
+                                 f"{', '.join(saved['name'] for saved in govee.read_moods()) or 'none'}")
+            lights.set_mood(mood)
+            return json.dumps({"showing": mood["name"]})
 
     # Change the speaker's volume (Nestor and John speak at it too)
     def set_volume(self, percent):

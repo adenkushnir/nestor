@@ -203,7 +203,7 @@ end. You'll hear these sounds:
 - soft taps while Claude is thinking;
 - a low tone if something went wrong.
 
-Music and lights are coming in later milestones.
+Music is coming in a later milestone. For lights, see [Govee lights](#govee-lights).
 
 ### Timers and alarms
 
@@ -271,6 +271,39 @@ John's settings in `config.yaml`:
 
 John's memory is in `data/memory.json`. The sleeping period that "goodnight" and "start my day" change is in
 `data/sleep.json`.
+
+## Govee lights
+
+Nestor controls Govee lights over the home Wi-Fi with Govee's LAN API. It's local and instant, with no Govee
+account. In the Govee Home app, open each light, then its settings, and switch on **LAN Control**. Nestor finds the
+lights by itself when it starts. Turn them off for Nestor with `govee: false` in `config.yaml`.
+
+**What the lights do by themselves:**
+- **Alerts:** a white flash when an alert is spoken. A Datebook leave-by gets an amber pulse, and "leave now" gets
+  red flashes. Afterwards the lights go back to exactly what they were showing, mood included.
+- **John:** they glow Datebook's aqua while John listens and thinks.
+- **Good morning:** a 2-minute sunrise, from dim candle orange to bright daylight, while the day ahead is read.
+- **Goodnight:** a 1-minute fade to off.
+
+**By voice:**
+- "Lights to blue, John", "lights at 30 percent", "lights off", "focus mode".
+- **Moods, as a conversation:**
+  1. "Hey John, I'm watching a movie."
+  2. He asks what kind. "A comedy."
+  3. He shows one look at a time on the lights, each with a name he makes up ("This is Popcorn Sunset: warm amber,
+     slowly breathing"). Say "next", "go back" or "that one".
+  4. He offers to save a look you like, e.g. "save it as comedy night".
+  5. Later: "Comedy night, John", "What moods have I saved?", "Delete the horror one".
+
+**Effects** are made by Nestor, by changing the colours a few times a second:
+- steady;
+- breathe (slowly brightening and dimming);
+- drift (blending between colours);
+- flicker (like a candle);
+- lightning (dim, with white flashes);
+- party (hopping between colours).
+
+Each comes slow, medium or fast. Saved moods are in `data/moods.json`.
 
 ## API
 
