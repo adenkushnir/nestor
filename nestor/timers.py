@@ -1,7 +1,8 @@
 # Timers and alarms ("set a timer for 10 minutes", "wake me at 7", "every weekday at 6:45"), kept in
 # data/timers.json. They ring on the speaker in bursts (the alarm tone and a spoken line, then a short gap, so John can
-# hear "Hey John, stop"), up to 5 minutes for alarms and 1 minute for timers. Snooze is 9 minutes, and stopping an
-# alarm during the sleeping period also starts the day.
+# hear "Hey John, stop"), up to 5 minutes for alarms and 1 minute for timers, at alarm_volume. Tapping the top of the
+# speaker stops it too. Snooze is 9 minutes unless you say how long, and stopping an alarm during the sleeping period
+# also starts the day.
 import datetime
 import logging
 import os
@@ -150,6 +151,8 @@ class TimerScheduler:
         self.settings = settings
         self.ringing = None  # The item ringing now, if any
         self.stop_request = None  # "stop" or "snooze" while ringing
+        self.snooze_minutes = SNOOZE_MINUTES
+        self.volume = float(settings.get("alarm_volume", 0.75))
         self.paused = threading.Event()  # Set while John is talking, so the ringing waits
         scheduler = self
         threading.Thread(target=self.run, name="timers", daemon=True).start()
@@ -195,8 +198,13 @@ class TimerScheduler:
             if self.paused.is_set():
                 time.sleep(0.2)
                 continue
-            self.announcer.sound(tone, tone_seconds)
-            self.announcer.say(ring_line(item, datetime.datetime.now()), with_chime=False).wait(60)
+            burst_started = time.time()
+            self.announcer.sound(tone, tone_seconds, volume=self.volume)
+            self.announcer.say(ring_line(item, datetime.datetime.now()), with_chime=False, volume=self.volume).wait(60)
+
+            # A tap on the speaker during the burst stops the ringing
+            if self.announcer.tapped_at >= burst_started:
+                self.stop_request = "stop"
             self.wait_for_stop(GAP_SECONDS)
         self.ringing = None
         self.after_ringing(item)
@@ -214,9 +222,9 @@ class TimerScheduler:
     def after_ringing(self, item):
         # Snooze, a stopped alarm at night, or nothing more
         if self.stop_request == "snooze":
-            at = datetime.datetime.now() + datetime.timedelta(minutes=SNOOZE_MINUTES)
+            at = datetime.datetime.now() + datetime.timedelta(minutes=self.snooze_minutes)
             save_item(dict(item, id=uuid.uuid4().hex[:6], at=at.isoformat(timespec="seconds"), time=None, days=None))
-            self.announcer.say(f"Snoozing for {SNOOZE_MINUTES} minutes.", with_chime=False)
+            self.announcer.say(f"Snoozing for {spoken_duration(self.snooze_minutes * 60)}.", with_chime=False)
         elif self.stop_request == "stop" and item["kind"] == "alarm" and self.announcer.quiet_hours.is_quiet():
             routines.start_my_day(self.announcer, self.settings)
 
@@ -228,10 +236,11 @@ class TimerScheduler:
         self.stop_request = "stop"
         return True
 
-    # Snooze what's ringing for 9 minutes; returns True if something was
-    def snooze(self):
+    # Snooze what's ringing, for 9 minutes unless told otherwise; returns True if something was
+    def snooze(self, minutes=SNOOZE_MINUTES):
         # Only a ringing item can be snoozed
         if self.ringing is None:
             return False
+        self.snooze_minutes = max(1, minutes)
         self.stop_request = "snooze"
         return True

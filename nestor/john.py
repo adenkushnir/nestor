@@ -23,10 +23,11 @@ SAMPLE_RATE = 16000  # openWakeWord and Whisper both work at 16 kHz
 FALLBACK_WAKE_WORD = "hey_jarvis"  # openWakeWord's built-in model, used until the "Hey John" model is trained
 SPEECH_OVER_NOISE = 2.5  # Speech must be this many times louder than the room's background
 SILENCE_SECONDS = 0.9  # This much quiet after speaking ends the recording
-MIN_SPEECH_SECONDS = 0.6  # Shorter sounds (like John's own beep) don't end the wait for speech
+MIN_SPEECH_SECONDS = 0.25  # Enough for "no" or "stop"; anything shorter is a click, not speech
 FIRST_WAIT_SECONDS = 6  # After "Hey John", how long to wait for you to start talking
 MAX_RECORD_SECONDS = 15
 STOP_WORDS = {"stop", "cancel", "never mind", "nevermind", "nothing", "that's all", "thanks", "thank you"}
+SNOOZE_WORDS = {"snooze", "snooze it", "snooze that", "snooze the alarm", "snooze the timer"}
 ANSWER_TIMEOUT_SECONDS = 180
 THINKING_AFTER_SECONDS = 2.5  # Play the thinking sound if Claude takes longer than this
 WAKE_PHRASE = re.compile(r"\b(hey|hi|okay),?\s+(john|jarvis)\b[,.!?]*", re.IGNORECASE)
@@ -115,9 +116,12 @@ class John:
 
     # Hold a conversation, pausing any ringing timer or alarm meanwhile so John can be heard
     def talk(self):
-        # Ringing waits while John talks and carries on afterwards unless it was stopped
-        if timers.scheduler:
+        ringing = timers.scheduler and timers.scheduler.ringing
+
+        # Ringing is cut off at once and waits while John talks; it carries on afterwards unless it was stopped
+        if ringing:
             timers.scheduler.paused.set()
+            self.announcer.interrupt()
 
         # The ringing always resumes, even if the conversation fails
         try:
@@ -134,24 +138,20 @@ class John:
 
         # Each round is one thing said and John's answer
         while True:
-            samples = self.record(wait_seconds)
-            self.recorder.stop()
-            play_sound(self.announcer, "done")
+            heard = self.listen(wait_seconds)
 
-            # Nothing said: the conversation is over
-            if not samples:
+            # Nobody spoke: the conversation is over
+            if heard is None:
                 return
-            heard = without_wake_phrase(self.transcribe(samples))
-            log.info("Heard: %r", heard)
-
             words = heard.lower().strip(" .!?,")
             ringing = timers.scheduler and timers.scheduler.ringing
 
-            # Snooze or stop what's ringing, or end on silence / "never mind", without asking Claude
-            if ringing and "snooze" in words:
+            # Snooze or stop what's ringing, or end on "never mind", without asking Claude ("snooze for 2 minutes"
+            # goes to Claude, which knows how long)
+            if ringing and words in SNOOZE_WORDS:
                 timers.scheduler.snooze()
                 return
-            elif ringing and (words in STOP_WORDS or "stop" in words or "off" in words):
+            elif ringing and (words in STOP_WORDS or "stop" in words or words.endswith("off")):
                 timers.scheduler.stop()
                 return
             elif not heard or words in STOP_WORDS:
@@ -163,6 +163,23 @@ class John:
                 self.announcer.say(answer, with_chime=False).wait(ANSWER_TIMEOUT_SECONDS)
             self.recorder.start()
             wait_seconds = self.follow_up_seconds
+
+    # Listen until something is said within wait_seconds: a recording that only caught a beep or a noise is followed
+    # by another while there's time. Returns the words ("" if nothing was understood), or None if nobody spoke.
+    def listen(self, wait_seconds):
+        ends = time.time() + wait_seconds
+
+        # Record, and record again if nothing was understood and time is left
+        while True:
+            samples = self.record(max(0.5, ends - time.time()))
+            heard = without_wake_phrase(self.transcribe(samples)) if samples else ""
+
+            # Words heard, nobody spoke, or out of time: stop listening
+            if heard or not samples or time.time() >= ends:
+                self.recorder.stop()
+                play_sound(self.announcer, "done")
+                log.info("Heard: %r", heard)
+                return heard if samples else None
 
     # Record from the microphone until speech ends; returns the samples, or [] if nobody spoke within wait_seconds
     def record(self, wait_seconds):

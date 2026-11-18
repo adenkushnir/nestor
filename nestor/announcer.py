@@ -77,26 +77,36 @@ class Announcer:
         self.quiet_hours = QuietHours(settings.get("quiet_hours", ""))
         self.held_lock = threading.Lock()
         self.jobs = queue.Queue()
+        self.tapped_at = 0.0  # When someone last tapped the speaker to stop what was playing (time.time())
         threading.Thread(target=self.run, name="announcer", daemon=True).start()
         threading.Thread(target=self.release_held, name="quiet-hours", daemon=True).start()
 
     # Queue one message, or a list to play together, and return an event set once spoken (or failed);
-    # with_chime=False leaves out the chime (John's answers come straight after his own sounds)
-    def say(self, texts, with_chime=True):
+    # with_chime=False leaves out the chime (John's answers come straight after his own sounds), and volume (0.0 to
+    # 1.0) replaces announce_volume (alarms ring louder)
+    def say(self, texts, with_chime=True, volume=None):
         # A single message is a list of one
         if isinstance(texts, str):
             texts = [texts]
         texts = [text.strip()[:MAX_TEXT_LENGTH] for text in texts if text.strip()]
         done = threading.Event()
-        self.jobs.put((texts, done, with_chime))
+        self.jobs.put((texts, done, with_chime, volume))
         return done
 
     # Queue a short sound (a WAV in the cache folder that lasts the given seconds) with no chime, and return an event
     # set once it has played
-    def sound(self, file_name, seconds):
+    def sound(self, file_name, seconds, volume=None):
         done = threading.Event()
-        self.jobs.put(([{"sound": file_name, "seconds": seconds}], done, False))
+        self.jobs.put(([{"sound": file_name, "seconds": seconds}], done, False, volume))
         return done
+
+    # Cut short whatever is playing and drop what's waiting to play (used when John is called over a ringing alarm)
+    def interrupt(self):
+        # Empty the queue, telling anyone waiting that their messages are finished
+        while not self.jobs.empty():
+            items, done, wants_chime, volume = self.jobs.get_nowait()
+            done.set()
+        self.speaker.interrupted.set()
 
     # Speak an alert now, or hold it during quiet hours; source says where it came from ("github", "reminder",
     # "datebook", ...). expires ("2026-11-17T18:40:00") drops it if it can't be spoken by then, and key skips repeats.
@@ -170,45 +180,57 @@ class Announcer:
             while not self.jobs.empty():
                 batch.append(self.jobs.get_nowait())
 
+            volumes = [volume for items, done, wants_chime, volume in batch if volume is not None]
+
             # A failed batch is logged and the worker carries on with the next one
             try:
-                self.announce([item for items, done, wants_chime in batch for item in items],
-                              any(wants_chime for items, done, wants_chime in batch))
+                self.announce([item for items, done, wants_chime, volume in batch for item in items],
+                              any(wants_chime for items, done, wants_chime, volume in batch),
+                              max(volumes) if volumes else None)
             except Exception as error:
                 log.error("Announcement failed: %s", error)
             finally:
                 # Tell everyone waiting on these messages that they are finished
-                for items, done, wants_chime in batch:
+                for items, done, wants_chime, volume in batch:
                     done.set()
 
     # Play a list of messages and sounds: make the audio first, then the chime (if wanted), each item in turn, and
-    # restore the speaker. A message is text; a sound is {"sound": file name, "seconds": length}.
-    def announce(self, items, wants_chime=True):
+    # restore the speaker. A message is text; a sound is {"sound": file name, "seconds": length}. A tap on the speaker
+    # or interrupt() ends the batch early.
+    def announce(self, items, wants_chime=True, volume=None):
         # An empty batch has nothing to say
         if not items:
             return
         audio = [item if isinstance(item, dict) else {"text": item, "speech": tts.make_speech(item, self.voice,
                  self.voice_rate)} for item in items]
         saved = self.speaker.snapshot()
+        self.speaker.interrupted.clear()
 
         # Whatever happens while playing, the volume and earlier media get restored
         try:
-            self.speaker.set_volume(self.announce_volume)
+            self.speaker.set_volume(self.announce_volume if volume is None else volume)
 
             # The chime is optional in config.yaml, and left out for John's sounds and answers
             if self.chime_file and wants_chime:
                 self.speaker.play_and_wait(self.media_url(self.chime_file), "audio/wav",
                                            expected_seconds=chime.CHIME_SECONDS)
 
-            # Play each sound or message in turn
+            # Play each sound or message in turn, stopping if someone taps the speaker or John cuts in
             for item in audio:
                 # Sounds are short WAVs timed by their known length; messages are speech
                 if "sound" in item:
-                    self.speaker.play_and_wait(self.media_url(item["sound"]), "audio/wav",
-                                               expected_seconds=item["seconds"])
+                    result = self.speaker.play_and_wait(self.media_url(item["sound"]), "audio/wav",
+                                                        expected_seconds=item["seconds"])
                 else:
                     log.info("Speaking: %s", item["text"])
-                    self.speaker.play_and_wait(self.media_url(item["speech"]), "audio/mpeg")
+                    result = self.speaker.play_and_wait(self.media_url(item["speech"]), "audio/mpeg")
+
+                # A tap is remembered (it stops a ringing alarm); either way the rest of the batch is skipped
+                if result == "paused":
+                    self.tapped_at = time.time()
+                    break
+                elif result == "interrupted":
+                    break
         finally:
             self.speaker.restore(saved)
 

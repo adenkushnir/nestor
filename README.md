@@ -200,9 +200,11 @@ Music and lights are coming in later milestones.
 Timers and alarms ring on the speaker in bursts: an alarm tone and a spoken line ("Your pasta timer is done.", "It's
 7 AM. Gym."), then a few seconds' gap, so John can hear you. While it's ringing:
 - **"Hey John, stop":** stops it.
-- **"Hey John, snooze":** rings again in 9 minutes.
+- **"Hey John, snooze":** rings again in 9 minutes, or as long as you say ("snooze for 2 minutes").
+- **Tap the top of the speaker:** stops it too.
 
-Alarms ring up to 5 minutes and timers up to 1 minute if nobody stops them. They ring even in the sleeping period.
+They ring at `alarm_volume` (75% unless set in `config.yaml`). Alarms ring up to 5 minutes and timers up to 1
+minute if nobody stops them. They ring even in the sleeping period.
 Stopping an alarm during the sleeping period also runs "start my day". Alarms can repeat ("every weekday", "Monday,
 Wednesday and Friday"). Ask John to list or cancel them. They're kept in `data/timers.json`.
 

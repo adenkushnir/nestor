@@ -73,7 +73,9 @@ def tool_definitions():
         tool("list_timers", "List the timers and alarms set, with their ids, when they ring and what's left."),
         tool("cancel_timer", "Cancel a timer or alarm by its id (from list_timers).", {"id": TEXT}),
         tool("stop_ringing", "Stop the timer or alarm that's ringing now."),
-        tool("snooze", "Snooze the alarm that's ringing now for 9 minutes."),
+        tool("snooze", "Snooze the timer or alarm that's ringing now.",
+             {"minutes": {"type": "integer", "description": "How long, if said (e.g. 'snooze for 2 minutes'); "
+                          "otherwise 9"}}),
         tool("next_trains", "The next NJ Transit trains for a trip, live: departure times, tracks and delays. Leave "
              "both stations empty for the user's saved trip, and set reverse for the way back.",
              {"from_station": {"type": "string", "description": "Station name or code, or empty"},
@@ -171,7 +173,8 @@ class JohnTools:
         elif name == "cancel_timer":
             return json.dumps({"cancelled": timers.cancel(arguments["id"])})
         elif name in ("stop_ringing", "snooze"):
-            ringing = timers.scheduler.stop() if name == "stop_ringing" else timers.scheduler.snooze()
+            ringing = timers.scheduler.stop() if name == "stop_ringing" else timers.scheduler.snooze(
+                arguments["minutes"] or timers.SNOOZE_MINUTES)
             return json.dumps({"done": ringing, "note": "" if ringing else "nothing was ringing"})
         elif name == "next_trains":
             return self.next_trains(arguments["from_station"], arguments["to_station"], arguments["reverse"])
