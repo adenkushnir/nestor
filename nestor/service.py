@@ -10,6 +10,7 @@ from nestor.discovery import Advertiser
 from nestor.event_alerts import EventAlerts
 from nestor.github_watch import GitHubWatcher
 from nestor.reminders import ReminderScheduler
+from nestor.timers import TimerScheduler
 from nestor.server import create_app
 from nestor.speaker import Speaker
 log = logging.getLogger(__name__)
@@ -43,10 +44,12 @@ class Service:
             except Exception as error:
                 log.warning("Datebook won't be able to find Nestor on the network: %s", error)
 
-        # Reminders and event heads-ups only fire in the full service, so a quick speak.py never speaks them twice
+        # Reminders, event heads-ups, timers and alarms only run in the full service, so a quick speak.py never speaks
+        # them twice
         if watchers:
             ReminderScheduler(self.announcer, settings)
             EventAlerts(self.announcer, settings)
+            TimerScheduler(self.announcer, settings)
 
         # GitHub alerts can be turned off in config.yaml
         if watchers and settings.get("github_watch", True):

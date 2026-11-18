@@ -182,6 +182,8 @@ John is Nestor's voice assistant. Say **"Hey John"** and ask anything. He answer
 - "Start my day" ends the sleeping period, reads the day ahead, then anything held overnight
 - "Goodnight" previews tomorrow and starts the sleeping period until quiet hours end
 - "Turn the volume down to 30", "What were the last alerts?", "Remember my locker code is 4412"
+- "Set a timer for 10 minutes", "Wake me up at 7", "Set an alarm for 6:45 every weekday"
+- "When's the next train?" or "Next train back from New York?" (live NJ Transit)
 - Anything else, with web search: "Who won the game last night?"
 
 After an answer, John listens for about 5 seconds for a follow-up without "Hey John". Say "stop" or "never mind" to
@@ -191,7 +193,26 @@ end. You'll hear these sounds:
 - soft taps while Claude is thinking;
 - a low tone if something went wrong.
 
-Timers, alarms, music and lights are coming in later milestones.
+Music and lights are coming in later milestones.
+
+### Timers and alarms
+
+Timers and alarms ring on the speaker in bursts: an alarm tone and a spoken line ("Your pasta timer is done.", "It's
+7 AM. Gym."), then a few seconds' gap, so John can hear you. While it's ringing:
+- **"Hey John, stop":** stops it.
+- **"Hey John, snooze":** rings again in 9 minutes.
+
+Alarms ring up to 5 minutes and timers up to 1 minute if nobody stops them. They ring even in the sleeping period.
+Stopping an alarm during the sleeping period also runs "start my day". Alarms can repeat ("every weekday", "Monday,
+Wednesday and Friday"). Ask John to list or cancel them. They're kept in `data/timers.json`.
+
+### Trains
+
+"When's the next train?" reads NJ Transit's live departure board for your trip: the next 3 trains, their tracks and
+delays. Ask "the next train back" for the other way, or name any two stations. It uses your NJ Transit developer
+account (the same one as Datebook) and keeps its sign-in token in `data/`, because NJ Transit allows only 5 new
+tokens a day. Your trip is Datebook's saved trip once Datebook is linked; until then, set `train_from` and
+`train_to` in `config.yaml` to the stations' two-letter codes, e.g. `"NB"` and `"NY"`.
 
 **How it works:**
 - **Wake word:** [openWakeWord](https://github.com/dscripka/openWakeWord) (open source, no account) hears "Hey
@@ -211,6 +232,8 @@ looks up for the answer.
 
    ```
    ANTHROPIC_API_KEY=sk-ant-...
+   NJT_USERNAME=your NJ Transit developer username (for trains)
+   NJT_PASSWORD=its password
    ```
 
 3. **Train the "Hey John" wake word** (free, about an hour, mostly waiting) with openWakeWord's
@@ -253,6 +276,9 @@ it. Everything is JSON.
 | `POST /briefing` `{"day", "wait"}` | Speak the briefing |
 | `POST /start-my-day` | End the sleeping period, speak the day ahead, then what was held overnight |
 | `POST /goodnight` | Speak tomorrow's preview, then start the sleeping period until quiet hours end |
+| `GET /timers` | Timers and alarms set, when each rings, and what's ringing |
+| `POST /timers/stop`, `POST /timers/snooze` | Stop or snooze what's ringing |
+| `DELETE /timers/<id>` | Cancel a timer or alarm |
 | `GET /health` | Is Nestor running, and which speaker |
 | `POST /pair`, `DELETE /pair`, `/datebook/...` | The Datebook link (see [Datebook](#datebook)) |
 
@@ -340,5 +366,5 @@ minutes.
 ## Status
 
 Milestones 1 (speaking), 2 (alerts), 3 (reminders and briefing) and 4 (the calendar from Datebook) are done, and
-Nestor's side of the Datebook link is ready. Hey John (milestone 5) is being built: talking, Datebook, reminders,
-start my day and goodnight work. Timers, alarms and trains come next.
+Nestor's side of the Datebook link is ready. Hey John (milestone 5) is being tested: talking, Datebook,
+reminders, timers, alarms, trains, start my day and goodnight.

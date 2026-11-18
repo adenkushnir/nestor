@@ -10,6 +10,7 @@ import openwakeword.utils
 import pvrecorder
 from faster_whisper import WhisperModel
 from openwakeword.model import Model as WakeWordModel
+from nestor import timers
 from nestor.brain import Brain
 from nestor.config import PROJECT_DIR
 from nestor.microphone import FRAME_LENGTH
@@ -17,6 +18,7 @@ from nestor.microphone import MIN_SPEECH_LEVEL
 from nestor.microphone import find_microphone
 from nestor.microphone import loudness
 from nestor.sounds import play_sound
+from nestor.trains import RailData
 SAMPLE_RATE = 16000  # openWakeWord and Whisper both work at 16 kHz
 FALLBACK_WAKE_WORD = "hey_jarvis"  # openWakeWord's built-in model, used until the "Hey John" model is trained
 SPEECH_OVER_NOISE = 2.5  # Speech must be this many times louder than the room's background
@@ -75,7 +77,8 @@ class John:
                      self.settings.get("whisper_model", "small.en"))
             self.whisper = WhisperModel(self.settings.get("whisper_model", "small.en"), device="cpu",
                                         compute_type="int8")
-            self.brain = Brain(self.announcer, self.settings, self.secrets["ANTHROPIC_API_KEY"])
+            rail = RailData(self.secrets.get("NJT_USERNAME"), self.secrets.get("NJT_PASSWORD"))
+            self.brain = Brain(self.announcer, self.settings, self.secrets["ANTHROPIC_API_KEY"], rail)
         except Exception as error:
             log.error("Hey John couldn't start: %s", error)
             return
@@ -95,7 +98,7 @@ class John:
                 if max(scores.values()) >= self.threshold:
                     log.info("Heard the wake word (score %.2f)", max(scores.values()))
                     self.wake_word.reset()
-                    self.conversation()
+                    self.talk()
                     self.wake_word.reset()
             except Exception as error:
                 log.error("Hey John had a problem: %s", error)
@@ -109,6 +112,20 @@ class John:
     # Keep a slow average of the room's background loudness, so speech is judged against it
     def learn_noise(self, frame):
         self.noise = 0.98 * self.noise + 0.02 * loudness(frame)
+
+    # Hold a conversation, pausing any ringing timer or alarm meanwhile so John can be heard
+    def talk(self):
+        # Ringing waits while John talks and carries on afterwards unless it was stopped
+        if timers.scheduler:
+            timers.scheduler.paused.set()
+
+        # The ringing always resumes, even if the conversation fails
+        try:
+            self.conversation()
+        finally:
+            # Let ringing carry on
+            if timers.scheduler:
+                timers.scheduler.paused.clear()
 
     # One conversation: listen, answer, and keep going while follow-ups come within a few seconds
     def conversation(self):
@@ -127,8 +144,17 @@ class John:
             heard = without_wake_phrase(self.transcribe(samples))
             log.info("Heard: %r", heard)
 
-            # Silence, or "stop" / "never mind", ends it without asking Claude
-            if not heard or heard.lower().strip(" .!?,") in STOP_WORDS:
+            words = heard.lower().strip(" .!?,")
+            ringing = timers.scheduler and timers.scheduler.ringing
+
+            # Snooze or stop what's ringing, or end on silence / "never mind", without asking Claude
+            if ringing and "snooze" in words:
+                timers.scheduler.snooze()
+                return
+            elif ringing and (words in STOP_WORDS or "stop" in words or "off" in words):
+                timers.scheduler.stop()
+                return
+            elif not heard or words in STOP_WORDS:
                 return
             answer = self.answer(heard)
 

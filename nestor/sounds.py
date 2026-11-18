@@ -12,6 +12,7 @@ SOUNDS = {
     "done": ([(987.8, 0.11), (659.3, 0.24)], 0.9),  # Falling: "got it" / stopped listening
     "thinking": ([(784.0, 0.16), (784.0, 0.16), (784.0, 0.22)], 0.45),  # Three soft taps while Claude works
     "error": ([(392.0, 0.18), (311.1, 0.34)], 1.0),  # Two low notes: something went wrong
+    "alarm": ([(1046.5, 0.13), (0.0, 0.07), (1046.5, 0.13), (0.0, 0.07), (1046.5, 0.13), (0.0, 0.35)] * 2, 1.2),
 }
 
 # Write a sound's WAV into the cache folder if it isn't there yet; returns (file name, length in seconds)

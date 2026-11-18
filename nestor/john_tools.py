@@ -1,11 +1,14 @@
-# Hey John's tools: what Claude can look up and do through Nestor (Datebook, reminders, the day ahead and goodnight,
-# volume, recent alerts, memory) plus web search, with the context line John sees before each thing the user says
+# Hey John's tools: what Claude can look up and do through Nestor (Datebook, reminders, timers and alarms, trains, the
+# day ahead and goodnight, volume, recent alerts, memory) plus web search, with the context line John sees before each
+# thing the user says
 import datetime
 import json
 from nestor import datebook
 from nestor import memory
 from nestor import reminders
 from nestor import routines
+from nestor import timers
+from nestor import trains
 from nestor.announcer import read_history
 from nestor.briefing import build_briefing
 from nestor.spoken import spoken_clock
@@ -56,6 +59,26 @@ def tool_definitions():
         tool("recent_alerts", "The latest alerts Nestor announced or held (Datebook, reminders, GitHub...), newest "
              "first.",
              {"count": {"type": "integer", "description": "How many, 1 to 10"}}),
+        tool("set_timer", "Start a timer that rings on the speaker when it's done.",
+             {"minutes": {"type": "number", "description": "How long, e.g. 10 or 0.5"},
+              "label": {"type": "string", "description": "What it's for, e.g. 'pasta'; empty if not said"}}),
+        tool("set_alarm", "Set an alarm that rings on the speaker until stopped. One-off (the next time that time "
+             "comes round, or on a date) or repeating on days.",
+             {"time": {"type": "string", "description": "24-hour time, like 07:00"},
+              "date": {"type": "string", "description": "A date like 2026-11-20 for a one-off on that day; empty "
+                       "for the next time that time comes round, or for a repeating alarm"},
+              "days": {"type": "string", "description": "For a repeating alarm: daily, weekdays, weekends, or days "
+                       "like 'mon, wed, fri'; empty for a one-off"},
+              "label": {"type": "string", "description": "What it's for, e.g. 'gym'; empty if not said"}}),
+        tool("list_timers", "List the timers and alarms set, with their ids, when they ring and what's left."),
+        tool("cancel_timer", "Cancel a timer or alarm by its id (from list_timers).", {"id": TEXT}),
+        tool("stop_ringing", "Stop the timer or alarm that's ringing now."),
+        tool("snooze", "Snooze the alarm that's ringing now for 9 minutes."),
+        tool("next_trains", "The next NJ Transit trains for a trip, live: departure times, tracks and delays. Leave "
+             "both stations empty for the user's saved trip, and set reverse for the way back.",
+             {"from_station": {"type": "string", "description": "Station name or code, or empty"},
+              "to_station": {"type": "string", "description": "Station name or code, or empty"},
+              "reverse": {"type": "boolean", "description": "True for the saved trip's way back"}}),
         tool("remember", "Remember a lasting fact about the user, only when asked.", {"fact": TEXT}),
         tool("forget", "Forget remembered facts containing these words, when asked.", {"about": TEXT}),
     ]
@@ -66,10 +89,11 @@ def trimmed(text):
 
 # Runs John's tools against the rest of Nestor
 class JohnTools:
-    # Keep the announcer (for speaking and volume) and the settings
-    def __init__(self, announcer, settings):
+    # Keep the announcer (for speaking and volume), the settings, and the NJ Transit account (None without one)
+    def __init__(self, announcer, settings, rail=None):
         self.announcer = announcer
         self.settings = settings
+        self.rail = rail
         self.definitions = tool_definitions() + [WEB_SEARCH]
 
     # The line John sees before what the user said: the time, the sleeping period, whether the phone is home,
@@ -79,6 +103,11 @@ class JohnTools:
         phone = "home" if datebook.phone_home(now) else "not home"
         line = (f"[Now: {now.strftime('%A, %B')} {now.day}, {now.year}, {spoken_clock(now.time())}. "
                 f"Sleeping period: {'on' if asleep else 'off'}. Phone: {phone}.")
+        ringing = timers.scheduler.ringing if timers.scheduler else None
+
+        # Say what's ringing, so "stop" or "turn it off" makes sense
+        if ringing:
+            line += f" Ringing now: {timers.ring_line(ringing, now)}"
 
         # Memories only need saying once per conversation
         if first_turn:
@@ -131,6 +160,21 @@ class JohnTools:
         elif name == "recent_alerts":
             count = max(1, min(10, arguments["count"]))
             return json.dumps(list(reversed(read_history()))[:count])
+        elif name == "set_timer":
+            return json.dumps({"set": timers.add_timer(arguments["minutes"] * 60, arguments["label"])})
+        elif name == "set_alarm":
+            alarm = timers.add_alarm(arguments["time"], arguments["label"], arguments["date"], arguments["days"])
+            return json.dumps({"set": alarm, "next_rings": timers.next_ring(alarm, datetime.datetime.now()).isoformat(
+                timespec="minutes")})
+        elif name == "list_timers":
+            return json.dumps(timers.timers_data())
+        elif name == "cancel_timer":
+            return json.dumps({"cancelled": timers.cancel(arguments["id"])})
+        elif name in ("stop_ringing", "snooze"):
+            ringing = timers.scheduler.stop() if name == "stop_ringing" else timers.scheduler.snooze()
+            return json.dumps({"done": ringing, "note": "" if ringing else "nothing was ringing"})
+        elif name == "next_trains":
+            return self.next_trains(arguments["from_station"], arguments["to_station"], arguments["reverse"])
         elif name == "remember":
             return json.dumps({"remembered": memory.remember(arguments["fact"])})
         elif name == "forget":
@@ -156,3 +200,29 @@ class JohnTools:
         else:
             self.announcer.announce_volume = level
         return json.dumps({"target": target, "percent": round(level * 100)})
+
+    # The next trains for the saved trip (Datebook's, else train_from and train_to in config.yaml) or the stations
+    # asked about, from NJ Transit's live board
+    def next_trains(self, from_station, to_station, reverse):
+        # Live trains need the NJ Transit account
+        if not self.rail:
+            raise RuntimeError("no NJ Transit account: add NJT_USERNAME and NJT_PASSWORD to .env")
+        stations = self.rail.stations()
+        trip = datebook.read_state().get("trip") or {}
+        from_code = trains.find_station(stations, from_station) if from_station.strip() else (
+            trip.get("from") or self.settings.get("train_from", ""))
+        to_code = trains.find_station(stations, to_station) if to_station.strip() else (
+            trip.get("to") or self.settings.get("train_to", ""))
+
+        # Both ends are needed, and reverse swaps them
+        if not from_code or not to_code:
+            raise ValueError("no trip: name both stations, or set train_from and train_to in config.yaml")
+        elif reverse:
+            from_code, to_code = to_code, from_code
+        next_trains = trains.trains_to(self.rail.departures(from_code), to_code)
+        return json.dumps({"from": stations.get(from_code, from_code), "to": stations.get(to_code, to_code),
+                           "trains": [{"departs": train["departs"].strftime("%H:%M") if train["departs"] else "",
+                                       "track": train["track"], "minutes_late": train["minutes_late"],
+                                       "status": train["status"], "said_as": trains.spoken_train(train, spoken_clock),
+                                       "arrives": trains.arrival_at(train, to_code).strftime("%H:%M")}
+                                      for train in next_trains]})

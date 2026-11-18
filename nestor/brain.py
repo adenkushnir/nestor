@@ -31,7 +31,9 @@ SYSTEM_PROMPT = (
     "with nothing at all.\n"
     "- Use web_search for current facts, news, sports, prices and anything you aren't sure of.\n"
     "- Use remember and forget only when asked to remember or forget something.\n"
-    "- Timers, alarms, music and lights are coming soon; until then say briefly that you can't do that yet.\n"
+    "- Timers and alarms ring on the speaker: for \"wake me at 7\" set an alarm, for a length of time a timer.\n"
+    "- next_trains has live NJ Transit trains; with no stations named it uses the saved trip.\n"
+    "- Music and lights are coming soon; until then say briefly that you can't do that yet.\n"
     "\n"
     "Each message starts with a bracketed line from Nestor with the current time and status; it isn't part of what "
     "OWNER said, so don't repeat it back.")
@@ -45,13 +47,13 @@ def spoken_answer(response):
 
 # Holds the conversation with Claude and runs John's tools
 class Brain:
-    # Connect to Claude with Nestor's own API key
-    def __init__(self, announcer, settings, api_key):
+    # Connect to Claude with Nestor's own API key; rail is the NJ Transit account for trains (None without one)
+    def __init__(self, announcer, settings, api_key, rail=None):
         self.client = anthropic.Anthropic(api_key=api_key)
         self.system_prompt = SYSTEM_PROMPT.replace("OWNER", settings.get("john_owner_name") or "the user")
         self.model = settings.get("john_model", "claude-opus-5-5")
         self.effort = settings.get("john_effort", "low")
-        self.tools = JohnTools(announcer, settings)
+        self.tools = JohnTools(announcer, settings, rail)
         self.messages = []
         self.last_turn = None
 
