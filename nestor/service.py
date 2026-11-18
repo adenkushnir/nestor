@@ -52,13 +52,14 @@ class Service:
         if watchers and settings.get("github_watch", True):
             GitHubWatcher(self.announcer, settings)
 
-        # Hey John runs in the full service once its keys and wake word file are in place
+        # Hey John runs in the full service; he loads in the background, as his libraries take a while
         if watchers and settings.get("john", True):
-            self.start_john(settings)
+            log.info("Hey John is starting in the background (this takes about a minute)")
+            threading.Thread(target=self.start_john, args=(settings,), name="john-start", daemon=True).start()
 
     # Start Hey John, or log what's missing for it (the rest of Nestor runs either way)
     def start_john(self, settings):
-        from nestor.john import John  # Imported only here: speech-to-text is slow to load, and speak.py doesn't need it
+        from nestor.john import John  # Imported here only: John's libraries load slowly, and speak.py doesn't need them
         from nestor.john import missing_setup
         secrets = load_secrets()
         problems = missing_setup(settings, secrets)

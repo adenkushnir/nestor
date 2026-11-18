@@ -184,7 +184,7 @@ John is Nestor's voice assistant. Say **"Hey John"** and ask anything. He answer
 - "Turn the volume down to 30", "What were the last alerts?", "Remember my locker code is 4412"
 - Anything else, with web search: "Who won the game last night?"
 
-After an answer, John listens for about 8 seconds for a follow-up without "Hey John". Say "stop" or "never mind" to
+After an answer, John listens for about 5 seconds for a follow-up without "Hey John". Say "stop" or "never mind" to
 end. You'll hear these sounds:
 - a rising tone when he's listening;
 - a falling tone when he's got it;
@@ -227,6 +227,7 @@ John's settings in `config.yaml`:
 
 | Setting | What it does |
 |---|---|
+| `john_speech_level` | How loud speech must be; `python -m nestor --mic-test` shows your levels and suggests one |
 | `john_wake_threshold` | 0.0 to 1.0: lower hears "Hey John" more easily, but also wakes up by mistake more often |
 | `whisper_model` | `small.en` (more accurate) or `base.en` (faster) |
 | `john_model`, `john_effort` | The Claude model and effort |

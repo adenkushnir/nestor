@@ -42,10 +42,12 @@ john_wake_word: "hey_john.onnx"
 john_wake_threshold: 0.5
 # Part of the microphone's name to use (e.g. "USB"); empty = the computer's default microphone
 microphone: ""
+# How loud you must be for John to count it as speech (python -m nestor --mic-test suggests a value)
+john_speech_level: 120
 # Speech-to-text model: "base.en" is faster, "small.en" is more accurate (downloaded the first time)
 whisper_model: "small.en"
 # Claude model and effort for John's answers ("low" answers fastest)
 john_model: "claude-opus-5-5"
 john_effort: "low"
 # How many seconds John keeps listening for a follow-up without "Hey John"
-john_follow_up_seconds: 8
+john_follow_up_seconds: 5
