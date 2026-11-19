@@ -79,6 +79,7 @@ class Announcer:
         self.held_lock = threading.Lock()
         self.jobs = queue.Queue()
         self.playing = False  # True while a batch is being played
+        self.speaking = False  # True while a batch with words in it (not just John's tones) is being played
         threading.Thread(target=self.run, name="announcer", daemon=True).start()
         threading.Thread(target=self.release_held, name="quiet-hours", daemon=True).start()
 
@@ -190,6 +191,8 @@ class Announcer:
                 batch.append(self.jobs.get_nowait())
             volumes = [volume for items, done, wants_chime, volume in batch if volume is not None]
             self.playing = True
+            self.speaking = any(not isinstance(item, dict) for items, done, wants_chime, volume in batch
+                                for item in items)
 
             # A failed batch is logged and the worker carries on with the next one
             try:
@@ -200,6 +203,7 @@ class Announcer:
                 log.error("Announcement failed: %s", error)
             finally:
                 self.playing = False
+                self.speaking = False
 
                 # Tell everyone waiting on these messages that they are finished
                 for items, done, wants_chime, volume in batch:
