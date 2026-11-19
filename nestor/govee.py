@@ -466,12 +466,29 @@ class GoveeLights:
 def read_moods():
     return read_json(MOODS_PATH, [])
 
-# Save a mood under a name (replacing one with the same name); returns it
+# Save a mood under a name (replacing one with the same name, and keeping its "asks for colours" setting); returns it
 def save_mood(mood, name):
     saved = dict(mood, name=str(name).strip(), saved=time.strftime("%Y-%m-%dT%H:%M:%S"))
+    replaced = [old for old in read_moods() if old["name"].lower() == saved["name"].lower()]
     moods = [old for old in read_moods() if old["name"].lower() != saved["name"].lower()]
+
+    # A mood that asked for colours still does after being saved again
+    if replaced and replaced[0].get("ask_colors"):
+        saved["ask_colors"] = True
     write_json(MOODS_PATH, moods + [saved])
     return saved
+
+# Turn a saved mood's "asks for colours" setting on or off (its saved colours are kept, and only used when it's off);
+# returns the mood, or None if there's no such mood
+def set_ask_colors(name, ask):
+    mood = find_mood(name)
+
+    # Only a saved mood can change
+    if not mood:
+        return None
+    mood["ask_colors"] = bool(ask)
+    write_json(MOODS_PATH, [mood if old["name"] == mood["name"] else old for old in read_moods()])
+    return mood
 
 # A saved mood by name (case doesn't matter, and part of the name is enough), or None
 def find_mood(name):
