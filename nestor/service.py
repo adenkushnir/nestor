@@ -57,7 +57,8 @@ class Service:
         if watchers and settings.get("govee", True):
             # Nestor runs without lights if their port is taken
             try:
-                GoveeLights(settings.get("light_groups"))
+                GoveeLights(settings.get("light_groups"), settings.get("plain_lights") or "",
+                            settings.get("signal_lights") or "")
             except OSError as error:
                 log.warning("Govee lights are off: %s", error)
 

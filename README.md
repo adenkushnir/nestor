@@ -285,8 +285,10 @@ lights by itself when it starts. Turn them off for Nestor with `govee: false` in
 - **Alerts:** a white flash when an alert is spoken. A Datebook leave-by gets an amber pulse, and "leave now" gets
   red flashes. Afterwards the lights go back to exactly what they were showing, mood included.
 - **John:** they glow Datebook's aqua while John listens and thinks.
-- **Good morning:** a 2-minute sunrise, from dim candle orange to bright daylight, while the day ahead is read.
-- **Goodnight:** a 1-minute fade to off.
+- Alerts and John's glow use the `signal_lights` group (every light if it's empty), e.g. just the wall.
+- **Good morning:** a 2-minute sunrise on every light, from dim candle orange to bright daylight, while the day
+  ahead is read.
+- **Goodnight:** every light that's on fades out over a minute.
 
 **Groups:** name groups of lights in `config.yaml` by their device ids (Nestor logs them when it finds the lights):
 
@@ -296,8 +298,13 @@ light_groups:
   "living room": ["04:DC:...", "04:5B:..."]
 ```
 
-"The wall" or "the living room lights" then means just that group; "lights" alone means all of them. Setting one
-group during a mood takes only that group out of it.
+"The wall" or "the living room lights" then means just that group. Plain "lights" means the `plain_lights` group
+(all of them if it's empty), and "both lights" or "all the lights" always means every light. Each group can play
+its own mood at the same time, and setting one group takes only that group out of its mood.
+
+**Changes from other apps win:** while a mood plays, Nestor checks the lights every 1.5 seconds. If one shows
+something Nestor didn't send (you changed it in the Google Home or Govee app), its group leaves the mood within about
+3 seconds and keeps what you set. The other group carries on.
 
 **By voice:**
 - "Lights to blue, John", "the wall at 30 percent", "living room lights off", "focus mode".

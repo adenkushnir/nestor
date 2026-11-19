@@ -65,6 +65,10 @@ govee: true
 # Names for groups of lights, by their Govee device ids (Nestor logs them when it finds the lights), e.g.
 # "wall": ["2F:3A:..."]. "Lights" alone always means all of them.
 light_groups: {}
+# Which group plain "lights" means ("" for all of them; "both lights" or "all" always means every light), and which
+# group alert flashes and John's glow use ("" for all). Good morning and goodnight always use every light.
+plain_lights: ""
+signal_lights: ""
 # Spotify on your phone and laptop (needs SPOTIFY_CLIENT_ID in .env; see the README)
 spotify: true
 # How loud Spotify goes (percent) while John listens or Nestor speaks, if it was louder

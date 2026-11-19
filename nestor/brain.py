@@ -35,8 +35,7 @@ SYSTEM_PROMPT = (
     "- next_trains has live NJ Transit trains; with no stations named it uses the saved trip.\n"
     "- Lights: set_lights for plain requests (\"lights to blue\", \"30 percent\", \"off\"); focus mode is a cool "
     "blue steady light.\n"
-    "- The lights are in groups: the wall (a strip) and the living room lights (two bulbs that always go together). "
-    "\"Lights\" alone means all of them.\n"
+    "- LIGHT_GROUPS\n"
     "- Moods: only when OWNER asks for lighting for something (\"I want lights for a movie I'm watching\", \"set the "
     "mood for movie night\"); just mentioning what they're doing isn't a request. Then have a real back-and-forth. "
     "First ask one or two short questions, one at a time (what kind of movie, cozy or lively, bright or dim), unless "
@@ -62,12 +61,27 @@ def spoken_answer(response):
     text = re.sub(r"https?://\S+", "", text)
     return re.sub(r"[*_#`>]+", "", text).strip()
 
+# What John is told about the light groups, from the config: their names, what plain "lights" means, and that each
+# group can show its own mood
+def light_groups_line(settings):
+    groups = list(settings.get("light_groups") or {})
+    plain = settings.get("plain_lights") or ""
+
+    # Without groups, the lights are simply all of them
+    if not groups:
+        return "The lights all go together; set_lights and moods use all of them."
+    meaning = f"the {plain} group" if plain else "all of them"
+    return (f"The lights are in groups: {', '.join(groups)}. Plain \"lights\" means {meaning}; \"both lights\" or "
+            "\"all the lights\" means every group. Each group can show its own mood: pass the user's words for "
+            "which lights in the lights field.")
+
 # Holds the conversation with Claude and runs John's tools
 class Brain:
     # Connect to Claude with Nestor's own API key; rail is the NJ Transit account for trains (None without one)
     def __init__(self, announcer, settings, api_key, rail=None):
         self.client = anthropic.Anthropic(api_key=api_key)
-        self.system_prompt = SYSTEM_PROMPT.replace("OWNER", settings.get("john_owner_name") or "the user")
+        self.system_prompt = SYSTEM_PROMPT.replace("LIGHT_GROUPS", light_groups_line(settings)).replace(
+            "OWNER", settings.get("john_owner_name") or "the user")
         self.model = settings.get("john_model", "claude-opus-5-5")
         self.effort = settings.get("john_effort", "low")
         self.tools = JohnTools(announcer, settings, rail)
