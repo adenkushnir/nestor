@@ -367,6 +367,17 @@ class John:
 
         # Read frames until speech has been followed by a pause, or the time runs out
         while time.time() - started < max_seconds:
+            # Nestor talking on the speaker isn't the user: wait until it's done, then listen afresh (John's own
+            # tones don't count, so words right after the listening tone are kept)
+            if self.announcer.speaking:
+                self.recorder.stop()
+                self.wait_for_quiet_speaker()
+                self.recorder.start()
+                self.speech.reset_states()
+                recorded, speech_seconds, quiet_seconds, best_chance = [], 0.0, 0.0, 0.0
+                started = time.time()
+                log.info("Waited for the speaker to finish before listening")
+                continue
             frame = self.recorder.read()
             recorded.append(frame)
             chance = float(self.speech.predict(numpy.array(frame, dtype=numpy.int16)))
