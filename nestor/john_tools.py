@@ -113,7 +113,14 @@ def tool_definitions():
         tool("list_moods", "List the saved moods with their colours and effects."),
         tool("lights_status", "What the lights are showing now: the mood (if any) and each light's group, power, "
              "brightness and colour."),
-        tool("use_mood", "Show a saved mood by its name.", {"name": TEXT}),
+        tool("use_mood", "Show a saved mood by its name. A mood that asks for colours needs them each time: if it "
+             "says so, ask the user which colours they want (1 to 4, names or hex), then call again with them.",
+             {"name": TEXT,
+              "colors": {"type": "array", "items": {"type": "string"},
+                         "description": "For a mood that asks for colours: the 1 to 4 chosen; empty otherwise"}}),
+        tool("mood_asks_colors", "Turn on or off whether a saved mood asks for its colours every time it's used (it "
+             "keeps its effect, speed and brightness), e.g. \"make Movie Time ask for colours\".",
+             {"name": TEXT, "ask": {"type": "boolean"}}),
         tool("delete_mood", "Delete a saved mood by its name.", {"name": TEXT}),
         tool("play_music", "Play music on Spotify on the user's phone or laptop (not the speaker): a song, artist, "
              "album or one of their playlists by name. With an empty query it resumes, or moves the music to the "
@@ -236,7 +243,7 @@ class JohnTools:
         elif name == "next_trains":
             return self.next_trains(arguments["from_station"], arguments["to_station"], arguments["reverse"])
         elif name in ("set_lights", "preview_mood", "adjust_mood", "save_mood", "list_moods", "use_mood",
-                      "delete_mood", "lights_status"):
+                      "delete_mood", "lights_status", "mood_asks_colors"):
             return self.lights(name, arguments)
         elif name in ("play_music", "music_control"):
             return self.music(name, arguments)
@@ -301,10 +308,19 @@ class JohnTools:
 
         # Saved moods are kept even without lights; showing anything needs them
         if name == "list_moods":
-            return json.dumps([{key: mood[key] for key in ("name", "colors", "effect", "speed")}
+            return json.dumps([{"name": mood["name"], "colors": "asked each time" if mood.get("ask_colors") else
+                                mood["colors"], "effect": mood["effect"], "speed": mood["speed"]}
                                for mood in govee.read_moods()])
         elif name == "delete_mood":
             return json.dumps({"deleted": govee.delete_mood(arguments["name"])})
+        elif name == "mood_asks_colors":
+            mood = govee.set_ask_colors(arguments["name"], arguments["ask"])
+
+            # Only a saved mood can change
+            if not mood:
+                raise ValueError(f"no saved mood called {arguments['name']!r}; saved: "
+                                 f"{', '.join(saved['name'] for saved in govee.read_moods()) or 'none'}")
+            return json.dumps({"mood": mood["name"], "asks_for_colors": mood["ask_colors"]})
         elif not lights or not lights.devices:
             raise RuntimeError("no Govee lights found on the Wi-Fi (is LAN Control on in the Govee app?)")
         elif name == "lights_status":
@@ -342,6 +358,23 @@ class JohnTools:
             if not mood:
                 raise ValueError(f"no saved mood called {arguments['name']!r}; saved: "
                                  f"{', '.join(saved['name'] for saved in govee.read_moods()) or 'none'}")
+            colors = [color.strip() for color in arguments.get("colors") or [] if color.strip()]
+
+            # A mood that asks for colours waits for them (the lights don't change until then); chosen colours are
+            # checked and used just this time
+            if mood.get("ask_colors") and not colors:
+                return json.dumps({"needs_colors": True, "mood": mood["name"], "note": "Nothing changed yet. Ask the "
+                                   "user which colours they want (1 to 4, names or hex), then call use_mood again "
+                                   "with them."})
+            elif colors:
+                unknown = [color for color in colors if not govee.parse_color(color)]
+
+                # Between 1 and 4 colours Nestor knows
+                if len(colors) > 4:
+                    raise ValueError("a mood takes 1 to 4 colours")
+                elif unknown:
+                    raise ValueError(f"unknown colour {unknown[0]!r}; use a name or #rrggbb")
+                mood = dict({key: value for key, value in mood.items() if key != "ask_colors"}, colors=colors)
             lights.set_mood(mood)
             self.showed_look = True
             return json.dumps({"showing": mood["name"]})

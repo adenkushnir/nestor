@@ -309,6 +309,8 @@ group during a mood takes only that group out of it.
   4. Say "next", "go back", "that one", or tweak it: "warmer", "slower", "more purple", "dimmer".
   5. He remembers what you liked for next time and offers to save it, e.g. "save it as comedy night".
   6. Later: "Comedy night, John", "What moods have I saved?", "Delete the horror one".
+- **Moods that ask for colours:** "Make Movie Time ask for colours" keeps its effect, speed and brightness, but asks
+  which colours (1 to 4) every time you use it, and starts once you answer. "Stop asking for colours" turns it off.
 
 **Effects** are made by Nestor, by changing the colours a few times a second:
 - steady;
