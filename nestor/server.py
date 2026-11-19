@@ -19,14 +19,19 @@ from nestor.announcer import read_history
 from nestor.briefing import DAYS
 from nestor.briefing import build_briefing
 from nestor.config import CACHE_DIR
+from nestor.config import load_secrets
+from nestor.john_tools import JohnTools
+from nestor.john_tools import connector_tool_definitions
 from nestor.quiet import QuietHours
 from nestor.spoken import speakable
 from nestor.spoken import spoken_moment
+from nestor.trains import RailData
 from nestor.when import parse_when
 WAIT_TIMEOUT_SECONDS = 180
 MAX_REQUEST_BYTES = 1_000_000  # Datebook's snapshot is the biggest thing sent in
 HEARTBEAT_SECONDS = 25  # The live feed sends a keep-alive this often, so idle connections aren't cut
 LOCAL_ADDRESSES = ("127.0.0.1", "::1")
+log = logging.getLogger(__name__)
 
 # Read the request's JSON object or form fields; returns (payload, error response or None). Bodies that aren't UTF-8
 # are read as Windows text, because Git Bash's curl sends characters like "·" in the Windows code page.
@@ -115,6 +120,7 @@ def create_app(announcer, settings):
     logging.getLogger("werkzeug").setLevel(logging.WARNING)  # Hide a log line for every audio request
     # Spotify sends the browser back here after signing in (Spotify only allows 127.0.0.1, not localhost)
     spotify_redirect = f"http://127.0.0.1:{int(settings.get('port', 8765))}/spotify/callback"
+    connector_tools = []  # The connector's copy of John's tools, made on first use
 
     # Serve generated audio (speech and chime) to the speaker
     @app.get("/media/<path:file_name>")
@@ -303,13 +309,44 @@ def create_app(announcer, settings):
             return f"Spotify sign-in didn't finish: {error}", 400
         return "Nestor is signed in to Spotify. You can close this tab."
 
+    # The tools Claude Code and Claude Desktop get through the connector (nestor_connector.py): John's, without his
+    # memory, plus speaking and the home's status
+    @app.get("/tools")
+    def list_tools():
+        return refuse_unpaired() or jsonify(tools=connector_tool_definitions())
+
+    # Run one of those tools: the body is its input; answers {"result": "..."} or an error with the reason
+    @app.post("/tools/<name>")
+    def run_tool(name):
+        payload, error = read_body()
+        refused = refuse_unpaired()
+
+        # Only this PC or a paired computer, a readable body, and a tool the connector has
+        if refused or error:
+            return refused or error
+        elif name not in {tool["name"] for tool in connector_tool_definitions()}:
+            return jsonify(error=f"no tool called {name}"), 404
+
+        # The tools are made on first use (John's own copy lives in his brain)
+        if not connector_tools:
+            connector_tools.append(JohnTools(announcer, settings, RailData(load_secrets().get("NJT_USERNAME"),
+                                                                           load_secrets().get("NJT_PASSWORD"))))
+
+        # A failing tool sends back what went wrong
+        try:
+            return jsonify(result=connector_tools[0].call(name, payload))
+        except Exception as tool_error:
+            log.info("Claude's %s failed: %s", name, tool_error)
+            return jsonify(error=str(tool_error)), 400
+
     # Quick check that Nestor is running and which speaker it uses
     @app.get("/health")
     def health():
         return jsonify(status="ok", speaker=announcer.speaker.name)
 
     # Pair a phone: {"code": "123456", "device": "Pixel 9"} with the code from python -m nestor --pair; answers
-    # {"token": "..."}, which the phone sends with every Datebook call after that
+    # {"token": "..."}, which the phone sends with every Datebook call after that. A computer (the Claude connector)
+    # adds "kind": "computer".
     @app.post("/pair")
     def pair():
         payload, error = read_body()
@@ -317,7 +354,8 @@ def create_app(announcer, settings):
         # A body that can't be read gets its error back
         if error:
             return error
-        token, problem = datebook.pair(payload.get("code") or "", payload.get("device") or "")
+        token, problem = datebook.pair(payload.get("code") or "", payload.get("device") or "",
+                                       kind=payload.get("kind") or "phone")
 
         # A wrong or old code gets the reason back
         if problem:
