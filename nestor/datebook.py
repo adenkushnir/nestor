@@ -48,8 +48,9 @@ def new_pairing_code(now=None):
     write_json(PAIRING_PATH, {"code": fingerprint(code), "expires": expires.isoformat(timespec="seconds"), "tries": 0})
     return code
 
-# Pair a phone with the code from new_pairing_code; returns (token, None), or (None, why it failed)
-def pair(code, device_name, now=None):
+# Pair a phone (or a computer, e.g. the PC's Claude connector) with the code from new_pairing_code; returns
+# (token, None), or (None, why it failed)
+def pair(code, device_name, now=None, kind="phone"):
     now = now or datetime.datetime.now()
 
     # One pairing at a time, so the tries count can't be raced
@@ -68,14 +69,15 @@ def pair(code, device_name, now=None):
             return None, "wrong pairing code"
         token = secrets.token_urlsafe(32)
         devices = read_json(PAIRED_PATH, [])
-        devices.append({"name": str(device_name or "phone")[:60], "token": fingerprint(token),
-                        "paired": now.isoformat(timespec="seconds")})
+        devices.append({"name": str(device_name or kind)[:60], "token": fingerprint(token),
+                        "paired": now.isoformat(timespec="seconds"), "kind": "computer" if kind == "computer" else
+                        "phone"})
         write_json(PAIRED_PATH, devices)
         os.remove(PAIRING_PATH)
     log.info("Paired with %s", device_name or "a phone")
     return token, None
 
-# True if the token belongs to a paired phone; a match also notes that the phone is home right now
+# True if the token belongs to a paired phone or computer; a phone's match also notes that the phone is home right now
 def check_token(token, now=None):
     global last_seen
 
@@ -83,12 +85,12 @@ def check_token(token, now=None):
     if not token:
         return False
     token_print = fingerprint(token)
-    paired = any(hmac.compare_digest(device["token"], token_print) for device in read_json(PAIRED_PATH, []))
+    matches = [device for device in read_json(PAIRED_PATH, []) if hmac.compare_digest(device["token"], token_print)]
 
-    # A paired phone calling in means it's on the home Wi-Fi
-    if paired:
+    # A paired phone calling in means it's on the home Wi-Fi (a computer calling in says nothing about the phone)
+    if any(device.get("kind", "phone") == "phone" for device in matches):
         last_seen = now or datetime.datetime.now()
-    return paired
+    return bool(matches)
 
 # True if a paired phone has called Nestor in the last few minutes, i.e. it's on the home Wi-Fi
 def phone_home(now=None):

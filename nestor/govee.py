@@ -147,6 +147,33 @@ class GoveeLights:
     def means_all(self, name):
         return self.ips_for(name) == set(self.devices)
 
+    # What the lights are showing now, for Claude: the mood (if any) and each light's group, power, brightness and
+    # colour, read fresh from the lights
+    def describe(self):
+        captured = self.capture()
+        described = []
+
+        # Each light, by its group
+        for ip, info in sorted(self.devices.items()):
+            status = captured.get(ip)
+            groups = [name for name, ids in self.groups.items() if info.get("device") in ids]
+            light = {"group": groups[0] if groups else "", "model": info.get("sku", ""),
+                     "in_mood": bool(self.mood) and ip not in self.held_out}
+
+            # A light that didn't answer is marked so
+            if not status:
+                light["answered"] = False
+            elif not status.get("onOff"):
+                light["on"] = False
+            else:
+                color = status.get("color") or {}
+                kelvin = status.get("colorTemInKelvin") or 0
+                light.update(on=True, brightness=status.get("brightness"), white_kelvin=kelvin,
+                             color="" if kelvin else "#{:02x}{:02x}{:02x}".format(*(color.get(part, 0)
+                                                                                    for part in "rgb")))
+            described.append(light)
+        return {"mood": self.mood, "lights": described}
+
     # Set one light's colour and brightness (white light given as kelvin goes to lights that know it, as a colour
     # to the rest)
     def show(self, ip, color, brightness, kelvin=0):

@@ -111,6 +111,8 @@ def tool_definitions():
               "name": {"type": "string", "description": "A new fun name if it changed a lot; empty to keep"}}),
         tool("save_mood", "Save the mood showing now under a name, to use again later.", {"name": TEXT}),
         tool("list_moods", "List the saved moods with their colours and effects."),
+        tool("lights_status", "What the lights are showing now: the mood (if any) and each light's group, power, "
+             "brightness and colour."),
         tool("use_mood", "Show a saved mood by its name.", {"name": TEXT}),
         tool("delete_mood", "Delete a saved mood by its name.", {"name": TEXT}),
         tool("play_music", "Play music on Spotify on the user's phone or laptop (not the speaker): a song, artist, "
@@ -125,6 +127,17 @@ def tool_definitions():
         tool("remember", "Remember a lasting fact about the user when asked, or what lighting they liked for an "
              "activity (e.g. 'likes dim warm drifting light for comedies').", {"fact": TEXT}),
         tool("forget", "Forget remembered facts containing these words, when asked.", {"about": TEXT}),
+    ]
+
+# The tools Claude Code and Claude Desktop get through the connector: John's, without his memory (it stays John's),
+# plus speaking on the speaker and the home's status
+def connector_tool_definitions():
+    tools = [tool for tool in tool_definitions() if tool["name"] not in ("remember", "forget")]
+    return tools + [
+        tool("speak", "Say something out loud on the Google speaker at home. During the sleeping period it's held "
+             "and said in the morning instead.", {"text": TEXT}),
+        tool("home_status", "The time at home, whether the sleeping period is on, whether the phone is home, and "
+             "what's ringing."),
     ]
 
 # Cut a tool result to a sensible size for one answer
@@ -223,10 +236,14 @@ class JohnTools:
         elif name == "next_trains":
             return self.next_trains(arguments["from_station"], arguments["to_station"], arguments["reverse"])
         elif name in ("set_lights", "preview_mood", "adjust_mood", "save_mood", "list_moods", "use_mood",
-                      "delete_mood"):
+                      "delete_mood", "lights_status"):
             return self.lights(name, arguments)
         elif name in ("play_music", "music_control"):
             return self.music(name, arguments)
+        elif name == "speak":
+            return json.dumps({"status": self.announcer.alert(arguments["text"], "claude")})
+        elif name == "home_status":
+            return self.context(datetime.datetime.now(), first_turn=False)
         elif name == "remember":
             return json.dumps({"remembered": memory.remember(arguments["fact"])})
         elif name == "forget":
@@ -290,6 +307,8 @@ class JohnTools:
             return json.dumps({"deleted": govee.delete_mood(arguments["name"])})
         elif not lights or not lights.devices:
             raise RuntimeError("no Govee lights found on the Wi-Fi (is LAN Control on in the Govee app?)")
+        elif name == "lights_status":
+            return json.dumps(lights.describe())
         elif name == "set_lights":
             color = govee.parse_color(arguments["color"]) if arguments["color"] else None
 

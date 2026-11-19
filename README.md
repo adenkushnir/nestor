@@ -351,6 +351,35 @@ what's playing ("Levitating by Dua Lipa"), and never says the device.
 The sign-in is kept in `data/spotify_token.json` and the last device used in `data/spotify_device.json`. Turn Spotify
 off with `spotify: false` in `config.yaml`.
 
+## Claude Code and Claude Desktop
+
+Claude Code and the Claude Desktop app on this PC can use Nestor's tools through `nestor_connector.py`, a small MCP
+connector the Claude app starts by itself. A chat can then:
+- read Datebook and add to it (your phone shows its usual prompt to confirm) or mark things done;
+- speak on the speaker (held until morning in the sleeping period), and set reminders, timers and alarms;
+- check trains and the briefing;
+- control the lights, with the same back-and-forth over moods as John, and Spotify.
+
+John's memory stays John's: chats can't read or change it. The connector passes every call to Nestor's web API, so
+Nestor has to be running.
+
+**Setup (once):**
+- **Claude Code:**
+  ```bash
+  claude mcp add --scope user nestor -- "C:/Vibes/Google Home/.venv/Scripts/python.exe" "C:/Vibes/Google Home/nestor_connector.py"
+  ```
+- **Claude Desktop:** Settings, then Developer, then **Edit Config**, and add:
+  ```json
+  {"mcpServers": {"nestor": {"command": "C:/Vibes/Google Home/.venv/Scripts/python.exe",
+                             "args": ["C:/Vibes/Google Home/nestor_connector.py"]}}}
+  ```
+  Then quit Claude Desktop fully (from the tray icon) and open it again.
+
+**Nestor on another computer** (e.g. the Tinker Board): set `nestor_url` in `config.yaml` on this PC (e.g.
+`http://192.168.1.30:8765`), run `python -m nestor --pair` on that computer, then here:
+`.venv/Scripts/python nestor_connector.py --pair 123456`. The pairing is kept in `data/connector_token.json`. A paired
+computer never counts as your phone being home.
+
 ## API
 
 Nestor's web server (port 8765, home network only) is also how the phone page, Datebook and the wall display talk to
@@ -373,6 +402,7 @@ it. Everything is JSON.
 | `DELETE /timers/<id>` | Cancel a timer or alarm |
 | `GET /music` | What's playing on Spotify: track, artists, album, album art URL, progress and device |
 | `GET /spotify/login` | Sign Nestor in to Spotify (open it in a browser on the PC) |
+| `GET /tools`, `POST /tools/<name>` | The connector's tools, and running one (body: its input) |
 | `GET /health` | Is Nestor running, and which speaker |
 | `POST /pair`, `DELETE /pair`, `/datebook/...` | The Datebook link (see [Datebook](#datebook)) |
 
