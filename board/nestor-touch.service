@@ -1,0 +1,12 @@
+# Touch for the Raspberry Pi 7-inch screen on the Tinker Board (see board/README.md)
+[Unit]
+Description=Nestor: touch for the 7-inch screen
+After=multi-user.target
+
+[Service]
+ExecStart=/usr/bin/python3 /usr/local/lib/nestor/nestor_touch.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

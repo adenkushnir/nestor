@@ -1,0 +1,48 @@
+// The official Raspberry Pi 7-inch DSI touchscreen on the ASUS Tinker Board S: its control chip (an ATtiny that
+// powers the screen and sets the backlight) is at 0x45 on I2C bus 3, and the picture comes from the first DSI output.
+// Touch is read by nestor_touch.py (the screen has no interrupt wire for Linux's touch driver).
+/dts-v1/;
+/plugin/;
+
+/ {
+	compatible = "asus,rk3288-tinker-s", "rockchip,rk3288";
+
+	// Switch on I2C bus 3 (the screen's control wires) with the screen's driver on it
+	fragment@0 {
+		target = <&i2c3>;
+		__overlay__ {
+			status = "okay";
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			rpi_screen: lcd@45 {
+				compatible = "raspberrypi,7inch-touchscreen-panel";
+				reg = <0x45>;
+
+				port {
+					screen_in: endpoint {
+						remote-endpoint = <&dsi_out>;
+					};
+				};
+			};
+		};
+	};
+
+	// Connect the DSI output to the screen
+	fragment@1 {
+		target = <&mipi_out>;
+		__overlay__ {
+			dsi_out: endpoint {
+				remote-endpoint = <&screen_in>;
+			};
+		};
+	};
+
+	// Switch on the DSI output
+	fragment@2 {
+		target = <&mipi_dsi>;
+		__overlay__ {
+			status = "okay";
+		};
+	};
+};
