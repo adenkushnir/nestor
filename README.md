@@ -302,9 +302,13 @@ light_groups:
 (all of them if it's empty), and "both lights" or "all the lights" always means every light. Each group can play
 its own mood at the same time, and setting one group takes only that group out of its mood.
 
-**Changes from other apps win:** while a mood plays, Nestor checks the lights every 1.5 seconds. If one shows
-something Nestor didn't send (you changed it in the Google Home or Govee app), its group leaves the mood within about
-3 seconds and keeps what you set. The other group carries on.
+**Changes from other apps win:** before Nestor changes a light (each frame of a moving mood, each step of John's glow,
+an alert flash or the sunrise and goodnight fades), it first checks the light still shows what Nestor sent last;
+steady moods are checked every 1.5 seconds. If a light shows something else (you changed it in the Google Home or
+Govee app), Nestor leaves it alone and looks again; still different, and its group leaves the mood, glow, flash or fade
+within about a second and keeps what you set. The other group carries on. After the glow or a flash, lights you didn't
+touch go back to what they showed before. (A scene playing from the Govee app comes back as a still colour after the
+glow or a flash: Govee's LAN control can't restart scenes.)
 
 **By voice:**
 - "Lights to blue, John", "the wall at 30 percent", "living room lights off", "focus mode".
