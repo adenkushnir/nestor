@@ -18,6 +18,8 @@ from nestor.spoken import spoken_clock
 from nestor.spoken import spoken_moment
 MAX_TOOL_RESULT = 12000  # Characters; a tool result longer than this is cut, so one answer stays affordable
 TEXT = {"type": "string"}
+WHICH_LIGHTS = {"type": "string", "description": "Which lights, in the user's words: 'the lights', 'the wall', 'both "
+                "lights', or a group name; empty if they didn't say"}
 WEB_SEARCH = {"type": "web_search_20260209", "name": "web_search", "max_uses": 3}
 log = logging.getLogger(__name__)
 
@@ -85,18 +87,18 @@ def tool_definitions():
               "to_station": {"type": "string", "description": "Station name or code, or empty"},
               "reverse": {"type": "boolean", "description": "True for the saved trip's way back"}}),
         tool("set_lights", "Control the Govee lights directly: on or off, a colour, white at a colour temperature, "
-             "and/or a brightness. For all of them it stops any mood; for one group (the wall, the living room "
-             "lights) that group leaves the mood and the rest carry on.",
-             {"lights": {"type": "string", "description": "all, or a group: wall, living room"},
+             "and/or a brightness. Those lights leave any mood; other lights carry on with theirs.",
+             {"lights": WHICH_LIGHTS,
               "power": {"type": "string", "enum": ["on", "off", "keep"]},
               "color": {"type": "string", "description": "A colour name (red, amber, purple...) or #rrggbb; empty "
                         "for none"},
               "white_kelvin": {"type": "integer", "description": "White light from 2000 (warm) to 6500 (daylight); "
                                "0 for none"},
               "brightness": {"type": "integer", "description": "1 to 100; 0 to keep it as it is"}}),
-        tool("preview_mood", "Show a lighting mood on the lights now: one look with a fun name you made up. Use it in "
-             "the mood conversation, one look at a time.",
-             {"name": {"type": "string", "description": "A fun name, e.g. 'Popcorn Sunset'"},
+        tool("preview_mood", "Show a lighting mood on some lights now: one look with a fun name you made up. Use it "
+             "in the mood conversation, one look at a time. Each group of lights can show its own mood.",
+             {"lights": WHICH_LIGHTS,
+              "name": {"type": "string", "description": "A fun name, e.g. 'Popcorn Sunset'"},
               "colors": {"type": "array", "items": {"type": "string"}, "description": "1 to 4 colours (names or "
                          "#rrggbb)"},
               "effect": {"type": "string", "enum": list(govee.EFFECTS)},
@@ -104,18 +106,20 @@ def tool_definitions():
               "brightness": {"type": "integer", "description": "1 to 100"}}),
         tool("adjust_mood", "Tweak the mood showing now (\"warmer\", \"slower\", \"more purple\", \"dimmer\") "
              "instead of making a new one. Only what changes is set.",
-             {"colors": {"type": "array", "items": {"type": "string"}, "description": "New colours; empty to keep"},
+             {"lights": WHICH_LIGHTS,
+              "colors": {"type": "array", "items": {"type": "string"}, "description": "New colours; empty to keep"},
               "effect": {"type": "string", "enum": ["keep"] + list(govee.EFFECTS)},
               "speed": {"type": "string", "enum": ["keep"] + list(govee.SPEEDS)},
               "brightness": {"type": "integer", "description": "1 to 100; 0 to keep"},
               "name": {"type": "string", "description": "A new fun name if it changed a lot; empty to keep"}}),
-        tool("save_mood", "Save the mood showing now under a name, to use again later.", {"name": TEXT}),
+        tool("save_mood", "Save the mood showing now under a name, to use again later.",
+             {"name": TEXT, "lights": WHICH_LIGHTS}),
         tool("list_moods", "List the saved moods with their colours and effects."),
-        tool("lights_status", "What the lights are showing now: the mood (if any) and each light's group, power, "
-             "brightness and colour."),
+        tool("lights_status", "What the lights are showing now: the moods playing and their groups, and each "
+             "light's group, mood, power, brightness and colour."),
         tool("use_mood", "Show a saved mood by its name. A mood that asks for colours needs them each time: if it "
              "says so, ask the user which colours they want (1 to 4, names or hex), then call again with them.",
-             {"name": TEXT,
+             {"name": TEXT, "lights": WHICH_LIGHTS,
               "colors": {"type": "array", "items": {"type": "string"},
                          "description": "For a mood that asks for colours: the 1 to 4 chosen; empty otherwise"}}),
         tool("mood_asks_colors", "Turn on or off whether a saved mood asks for its colours every time it's used (it "
@@ -333,24 +337,26 @@ class JohnTools:
                 raise ValueError(f"unknown colour {arguments['color']!r}; use a name or #rrggbb")
             power = {"on": True, "off": False}.get(arguments["power"])
             lights.set_lights(power, color, max(0, arguments["white_kelvin"]), max(0, arguments["brightness"]),
-                              arguments["lights"] or "all")
+                              arguments["lights"])
             return json.dumps({"done": True})
         elif name == "preview_mood":
             mood = {key: arguments[key] for key in ("name", "colors", "effect", "speed", "brightness")}
-            lights.set_mood(mood)
+            lights.set_mood(mood, arguments["lights"])
             self.showed_look = True
             return json.dumps({"showing": mood["name"]})
         elif name == "adjust_mood":
             changes = {key: arguments[key] for key in ("colors", "name", "brightness") if arguments[key]}
             changes.update({key: arguments[key] for key in ("effect", "speed") if arguments[key] != "keep"})
-            mood = lights.adjust_mood(changes)
+            mood = lights.adjust_mood(changes, arguments["lights"])
             self.showed_look = True
             return json.dumps({"showing": mood})
         elif name == "save_mood":
+            entry = lights.mood_for(arguments["lights"])
+
             # Only a mood that's showing can be saved
-            if not lights.mood:
-                raise ValueError("no mood is showing to save")
-            return json.dumps({"saved": govee.save_mood(lights.mood, arguments["name"])["name"]})
+            if not entry:
+                raise ValueError("no mood is showing on those lights to save")
+            return json.dumps({"saved": govee.save_mood(entry["mood"], arguments["name"])["name"]})
         else:
             mood = govee.find_mood(arguments["name"])
 
@@ -375,7 +381,7 @@ class JohnTools:
                 elif unknown:
                     raise ValueError(f"unknown colour {unknown[0]!r}; use a name or #rrggbb")
                 mood = dict({key: value for key, value in mood.items() if key != "ask_colors"}, colors=colors)
-            lights.set_mood(mood)
+            lights.set_mood(mood, arguments.get("lights") or "")
             self.showed_look = True
             return json.dumps({"showing": mood["name"]})
 
