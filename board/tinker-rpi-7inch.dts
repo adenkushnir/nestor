@@ -1,0 +1,117 @@
+// The official Raspberry Pi 7-inch DSI touchscreen on the ASUS Tinker Board S, with the same drivers the Raspberry Pi
+// uses: the screen's control chip (an ATtiny at 0x45 on I2C bus 3) gives power, backlight and two reset lines; the
+// TC358762 bridge turns the board's DSI output into the panel's signal; the panel entry has its exact timings.
+// Touch is read by nestor_touch.py (the screen has no interrupt wire for Linux's touch driver).
+/dts-v1/;
+/plugin/;
+
+&{/} {
+	// The panel itself (800 x 480), powered and lit by the control chip, at 27.0 MHz (a clock the board makes exactly;
+	// the DSI link then runs at exactly 27.0 x 24 = 648 Mbit/s, which the bridge needs, see
+	// board/rockchip-dsi-exact-non-burst-rate.patch). ASUS's widths left the picture 20 pixels too far left, so the
+	// back porch is 20 longer and the front porch 20 shorter (same line length)
+	rpi_7inch_panel: panel-rpi-7inch {
+		compatible = "panel-dpi";
+		power-supply = <&rpi_7inch_power>;
+		backlight = <&rpi_7inch_power>;
+		width-mm = <154>;
+		height-mm = <86>;
+		data-mapping = "rgb24";
+
+		panel-timing {
+			clock-frequency = <27000000>;
+			hactive = <800>;
+			vactive = <480>;
+			hfront-porch = <50>;
+			hsync-len = <20>;
+			hback-porch = <46>;
+			vfront-porch = <7>;
+			vsync-len = <2>;
+			vback-porch = <21>;
+			hsync-active = <0>;
+			vsync-active = <0>;
+			de-active = <1>;
+			pixelclk-active = <1>;
+		};
+
+		port {
+			rpi_7inch_panel_in: endpoint {
+				remote-endpoint = <&rpi_7inch_bridge_out>;
+			};
+		};
+	};
+
+	// Releases the bridge from reset once the screen has power (the bridge's driver switches this on)
+	rpi_7inch_bridge_reset: regulator-rpi-7inch-bridge {
+		compatible = "regulator-fixed";
+		regulator-name = "rpi_7inch_bridge";
+		gpio = <&rpi_7inch_power 0 0>;
+		enable-active-high;
+		vin-supply = <&rpi_7inch_power>;
+	};
+
+	// Releases the touch chip from reset, always (nestor_touch.py reads it)
+	rpi_7inch_touch_reset: regulator-rpi-7inch-touch {
+		compatible = "regulator-fixed";
+		regulator-name = "rpi_7inch_touch";
+		gpio = <&rpi_7inch_power 1 0>;
+		enable-active-high;
+		vin-supply = <&rpi_7inch_power>;
+		regulator-always-on;
+	};
+};
+
+// The screen's control chip on I2C bus 3 (switched on here)
+&i2c3 {
+	status = "okay";
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	rpi_7inch_power: regulator@45 {
+		compatible = "raspberrypi,7inch-touchscreen-panel-regulator";
+		reg = <0x45>;
+		gpio-controller;
+		#gpio-cells = <2>;
+	};
+};
+
+// The DSI output (switched on here) with the bridge on it
+&mipi_dsi {
+	status = "okay";
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	bridge@0 {
+		compatible = "toshiba,tc358762";
+		reg = <0>;
+		vddc-supply = <&rpi_7inch_bridge_reset>;
+
+		ports {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			port@0 {
+				reg = <0>;
+
+				rpi_7inch_bridge_in: endpoint {
+					remote-endpoint = <&rpi_7inch_dsi_out>;
+				};
+			};
+
+			port@1 {
+				reg = <1>;
+
+				rpi_7inch_bridge_out: endpoint {
+					remote-endpoint = <&rpi_7inch_panel_in>;
+				};
+			};
+		};
+	};
+};
+
+// Connect the DSI output to the bridge
+&mipi_out {
+	rpi_7inch_dsi_out: endpoint {
+		remote-endpoint = <&rpi_7inch_bridge_in>;
+	};
+};

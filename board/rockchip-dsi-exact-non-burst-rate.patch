@@ -1,0 +1,31 @@
+From: Nestor <nestor@localhost>
+Subject: [PATCH] drm/rockchip: dsi: exact link rate for non-burst video
+
+Bridges like the TC358762 on the Raspberry Pi 7-inch screen rebuild the pixel
+timing from the DSI link rate, so a non-burst video link must run at exactly
+the pixel data rate; the usual 25% extra left the picture shifted and its
+colours a byte off on the ASUS Tinker Board.
+---
+--- a/drivers/gpu/drm/rockchip/dw-mipi-dsi-rockchip.c
++++ b/drivers/gpu/drm/rockchip/dw-mipi-dsi-rockchip.c
+@@ -573,8 +573,18 @@
+ 
+ 	mpclk = DIV_ROUND_UP(mode->clock, MSEC_PER_SEC);
+ 	if (mpclk) {
+-		/* take 1 / 0.8, since mbps must big than bandwidth of RGB */
+-		tmp = mpclk * (bpp / lanes) * 10 / 8;
++		/*
++		 * Non-burst video: bridges like the TC358762 (Raspberry Pi 7-inch
++		 * screen) rebuild the pixel timing from the link rate, so it must
++		 * be exactly the pixel data rate. Otherwise take 1 / 0.8, since
++		 * mbps must big than bandwidth of RGB.
++		 */
++		if ((mode_flags & MIPI_DSI_MODE_VIDEO) &&
++		    !(mode_flags & MIPI_DSI_MODE_VIDEO_BURST))
++			tmp = DIV_ROUND_UP(mode->clock * (bpp / lanes),
++					   MSEC_PER_SEC);
++		else
++			tmp = mpclk * (bpp / lanes) * 10 / 8;
+ 		if (tmp < max_mbps)
+ 			target_mbps = tmp;
+ 		else

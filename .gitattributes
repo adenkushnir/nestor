@@ -1,0 +1,7 @@
+# Files that run or get built on the Tinker Board keep Linux line endings, even in a Windows checkout
+*.sh text eol=lf
+*.py text eol=lf
+*.service text eol=lf
+*.dts text eol=lf
+*.patch text eol=lf
+*.config text eol=lf
