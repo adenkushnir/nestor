@@ -1,0 +1,22 @@
+# Shows Nestor's screen page full-screen on the 7-inch screen from power-on: a cage kiosk with Chromium, as Aden's
+# account, once Nestor answers (see board/README.md)
+[Unit]
+Description=Nestor: the 7-inch screen's page
+Wants=nestor.service seatd.service
+After=nestor.service seatd.service
+
+[Service]
+User=aden
+RuntimeDirectory=nestor-screen
+Environment=XDG_RUNTIME_DIR=/run/nestor-screen
+Environment=LIBSEAT_BACKEND=seatd
+ExecStartPre=/bin/sh -c 'until curl -sf http://localhost:8765/health > /dev/null; do sleep 2; done'
+TimeoutStartSec=600
+ExecStart=/usr/bin/cage -- /usr/bin/chromium --ozone-platform=wayland --kiosk --force-device-scale-factor=1 \
+    --no-first-run --noerrdialogs --password-store=basic --disable-features=Translate \
+    --user-data-dir=/home/aden/.cache/nestor-screen http://localhost:8765/screen
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

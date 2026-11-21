@@ -1,8 +1,9 @@
 # The Tinker Board and its 7-inch screen
 
 Nestor's wall display runs on an **ASUS Tinker Board S** (Rockchip RK3288, 32-bit, 2 GB) in a SmartiPi Touch case
-with the **official Raspberry Pi 7-inch touchscreen** (800 × 480, DSI ribbon cable). This folder has what it takes
-to make that screen work on [Armbian](https://www.armbian.com/tinkerboard/) (Debian 13).
+with the **official Raspberry Pi 7-inch touchscreen** (800 × 480, DSI ribbon cable) and a USB microphone. This folder
+has what it takes to make that screen work on [Armbian](https://www.armbian.com/tinkerboard/) (Debian 13), and to run
+Nestor itself on the board.
 
 | File | What it is |
 |---|---|
@@ -13,6 +14,10 @@ to make that screen work on [Armbian](https://www.armbian.com/tinkerboard/) (Deb
 | `nestor-touch.service` | Runs `nestor_touch.py` at start-up |
 | `copy-to-emmc.sh` | Copies the finished system from the microSD card to the board's built-in storage (eMMC) |
 | `screen-ruler.html` | A test picture for checking the screen's picture is lined up to the pixel |
+| `install-nestor.sh` | Installs Nestor on the board: Debian's packages, the code from GitHub, Python and John's Vosk model |
+| `requirements-board.txt` | Nestor's Python packages on the board (on top of Debian's) |
+| `nestor.service` | Runs Nestor from power-on as your account |
+| `nestor-screen.service` | Shows Nestor's screen page full-screen on the 7-inch screen (a `cage` kiosk with Chromium) |
 
 ## Why it needs all this
 
@@ -88,6 +93,68 @@ to make that screen work on [Armbian](https://www.armbian.com/tinkerboard/) (Deb
    `EMMC-COPY-OK`, unplug the power, take the card out, leave the cap off, and plug back in. The card stays as a
    backup: to start from it again, put it back and the cap on Maskrom.
 
+## Running Nestor on the board
+
+Nestor runs on the board as your own account, from `~/nestor` (a clone of this repo). Everything works as on a PC,
+except that **John hears you with [Vosk](https://alphacephei.com/vosk/)** instead of Whisper: Whisper takes 17-19
+seconds per request on this processor and heats it to its 90 °C cut-off within a minute, while Vosk keeps up as you
+speak on one core (about 60 °C). Vosk writes no punctuation, so John also wakes on a short phrase ending in "John"
+("turn the wall blue john"), not only on "Hey John". The microphone is read with Linux's `arecord`, as pvrecorder
+doesn't support the board's processor.
+
+1. **Install** (as root on the board; replace `aden` with your account):
+
+   ```bash
+   curl -sSLO https://raw.githubusercontent.com/adenkushnir/nestor/main/board/install-nestor.sh
+   bash install-nestor.sh aden
+   timedatectl set-timezone America/New_York    # your time zone: Armbian starts on UTC
+   ```
+
+   The time zone matters: on UTC, reminders and alarms come hours early or late.
+
+2. **Copy your private files** from the PC (in Git Bash, in the project folder). They never go through GitHub:
+
+   ```bash
+   tar -cf - .env config.yaml reminders.yaml data | ssh aden@<board address> 'tar -xf - -C ~/nestor && chmod 600 ~/nestor/.env'
+   ```
+
+3. **The board's settings** in `~/nestor/config.yaml`:
+
+   ```yaml
+   speech_to_text: "vosk"
+   microphone: "USB"      # part of the microphone's name (arecord -l lists them)
+   trial: false           # true while the PC's Nestor still runs (see below)
+   ```
+
+4. **The microphone's level:** many USB microphones start at 0% or with an automatic gain that boosts background
+   noise. Card 2 here; `arecord -l` shows yours:
+
+   ```bash
+   amixer -c 2 sset Mic 8 cap
+   amixer -c 2 sset "Auto Gain Control" off
+   alsactl store
+   ```
+
+5. **Start it from power-on**, with the screen page:
+
+   ```bash
+   cp ~aden/nestor/board/nestor.service ~aden/nestor/board/nestor-screen.service /etc/systemd/system/
+   systemctl enable --now nestor nestor-screen
+   journalctl -u nestor -f     # Nestor's log
+   ```
+
+6. **On the PC**, point the Claude connector, the Claude Code hook and the scripts at the board with
+   `nestor_url: "http://<board address>:8765"` in its `config.yaml` (see "Claude Code and Claude Desktop" in the main
+   README for pairing the connector), and stop the PC's own Nestor.
+
+**Trial mode** (`trial: true`) is for trying the board while the PC's Nestor keeps running: the board leaves out
+reminders, heads-ups, timers ringing, GitHub alerts, Spotify and the Datebook link (the PC does those, so nothing is
+said twice), while John and direct commands work. Set `john: false` on the PC meanwhile, so only one John listens.
+
+**GitHub alerts** use the GitHub CLI's login: `apt install gh`, then `gh auth login` as your account on the board.
+
+**Updating:** `cd ~/nestor && git pull && sudo systemctl restart nestor` (the screen page reloads by itself).
+
 ## Things to know
 
 - **Don't scan I2C bus 3** (e.g. `i2cdetect -y 3`): the screen's control chip jams, and then the screen only comes
@@ -101,3 +168,6 @@ to make that screen work on [Armbian](https://www.armbian.com/tinkerboard/) (Deb
 - **Smoothness** (Chromium 150 in the `cage` kiosk): glass blur over a moving full-screen background runs at the
   screen's full ~58 frames a second.
 - Kernel updates are held. To update, rebuild the kernel on the new Armbian branch the same way and install it.
+- **Heat:** with only its heatsink (no fan), the board reaches its 90 °C cut-off within a minute or two of all four
+  cores working flat out, and switches itself off (screen and lights go dark). Nestor with Vosk and the screen page
+  stays around 58 °C.

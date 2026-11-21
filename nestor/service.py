@@ -37,9 +37,15 @@ class Service:
         self.web_thread.start()
         log.info("Web server on %s", base_url)
         self.advertiser = None
+        trial = watchers and settings.get("trial", False)
+        scheduled = watchers and not trial
 
-        # Only the full service tells Datebook where it is; a failure there doesn't stop Nestor
-        if watchers:
+        # Trial mode, for trying Nestor on a second machine (the Tinker Board) while the first keeps running
+        if trial:
+            log.info("Trial mode: no reminders, heads-ups, timers ringing, GitHub alerts, Spotify or Datebook here")
+
+        # Only the full service tells Datebook where it is (not in trial mode); a failure there doesn't stop Nestor
+        if scheduled:
             # Announce on the same network as the speaker
             try:
                 self.advertiser = Advertiser(lan_ip_towards(self.speaker.host), port)
@@ -47,8 +53,8 @@ class Service:
                 log.warning("Datebook won't be able to find Nestor on the network: %s", error)
 
         # Reminders, event heads-ups, timers and alarms only run in the full service, so a quick speak.py never speaks
-        # them twice
-        if watchers:
+        # them twice (nor a trial copy)
+        if scheduled:
             ReminderScheduler(self.announcer, settings)
             EventAlerts(self.announcer, settings)
             TimerScheduler(self.announcer, settings)
@@ -62,12 +68,13 @@ class Service:
             except OSError as error:
                 log.warning("Govee lights are off: %s", error)
 
-        # Spotify, once its Client ID is in .env (the sign-in itself happens in the browser, see the README)
-        if watchers and settings.get("spotify", True) and load_secrets().get("SPOTIFY_CLIENT_ID"):
+        # Spotify, once its Client ID is in .env (the sign-in itself happens in the browser, see the README); not in
+        # trial mode, where two copies would take turns renewing the same sign-in
+        if scheduled and settings.get("spotify", True) and load_secrets().get("SPOTIFY_CLIENT_ID"):
             Spotify(load_secrets()["SPOTIFY_CLIENT_ID"], int(settings.get("music_duck_volume", 20)))
 
         # GitHub alerts can be turned off in config.yaml
-        if watchers and settings.get("github_watch", True):
+        if scheduled and settings.get("github_watch", True):
             GitHubWatcher(self.announcer, settings)
 
         # Hey John runs in the full service; he loads in the background, as his libraries take a while
