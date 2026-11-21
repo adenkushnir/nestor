@@ -107,7 +107,10 @@ doesn't support the board's processor.
    ```bash
    curl -sSLO https://raw.githubusercontent.com/adenkushnir/nestor/main/board/install-nestor.sh
    bash install-nestor.sh aden
+   timedatectl set-timezone America/New_York    # your time zone: Armbian starts on UTC
    ```
+
+   The time zone matters: on UTC, reminders and alarms come hours early or late.
 
 2. **Copy your private files** from the PC (in Git Bash, in the project folder). They never go through GitHub:
 
