@@ -45,8 +45,12 @@ microphone: ""
 # How sure the speech detector must be that a sound is a voice, 0.0 to 1.0 (lower hears quieter speech;
 # python -m nestor --mic-test shows its scores)
 john_speech_threshold: 0.4
-# Speech-to-text model: "base.en" is faster, "small.en" is more accurate (downloaded the first time)
+# Speech-to-text: "whisper" on a PC, "vosk" on the Tinker Board (Whisper is too slow there)
+speech_to_text: "whisper"
+# Whisper's model: "base.en" is faster, "small.en" is more accurate (downloaded the first time)
 whisper_model: "small.en"
+# Vosk's model folder in the project folder (downloaded by hand, see board/README.md)
+vosk_model: "vosk-model-small-en-us-0.15"
 # Claude model and effort for John's answers ("low" answers fastest)
 john_model: "claude-opus-5-5"
 john_effort: "low"
@@ -73,7 +77,11 @@ signal_lights: ""
 spotify: true
 # How loud Spotify goes (percent) while John listens or Nestor speaks, if it was louder
 music_duck_volume: 20
-# Where the Claude Code / Claude Desktop connector finds Nestor; empty means this PC (set it when Nestor runs elsewhere)
+# Where the Claude Code / Claude Desktop connector, the Claude Code hook and the scripts (speak.py, tell.py, ...)
+# find Nestor; empty means this PC (set it when Nestor runs elsewhere, e.g. "http://192.168.1.33:8765")
 nestor_url: ""
 # How loud timers and alarms ring, 0.0 to 1.0
 alarm_volume: 0.75
+# Trial mode, for trying Nestor on a second machine while the first keeps running: no reminders, heads-ups, timers
+# ringing, GitHub alerts, Spotify or Datebook link here (John and direct commands still work)
+trial: false

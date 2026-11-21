@@ -19,3 +19,5 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+# Vosk speech-to-text models (downloaded by hand on the Tinker Board)
+vosk-model-*/

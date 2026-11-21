@@ -1,7 +1,7 @@
 # Hey John: listens on the microphone for "Hey John" (the words, checked by a tiny Whisper model whenever the speech
 # detector hears a short phrase, or a trained openWakeWord model if there is one), records until you stop talking,
-# turns it into text on this computer (faster-whisper), asks the brain, and speaks the answer, then listens a few
-# seconds for a follow-up. "Hey John, what time is it?" can be said in one breath.
+# turns it into text on this computer (faster-whisper, or Vosk on the Tinker Board), asks the brain, and speaks the
+# answer, then listens a few seconds for a follow-up. "Hey John, what time is it?" can be said in one breath.
 import logging
 import os
 import re
@@ -10,8 +10,6 @@ import time
 from collections import deque
 import numpy
 import openwakeword.utils
-import pvrecorder
-from faster_whisper import WhisperModel
 from openwakeword.model import Model as WakeWordModel
 from openwakeword.vad import VAD
 from nestor import govee
@@ -21,8 +19,10 @@ from nestor import timers
 from nestor.brain import Brain
 from nestor.config import PROJECT_DIR
 from nestor.microphone import FRAME_LENGTH
-from nestor.microphone import find_microphone
+from nestor.microphone import open_microphone
 from nestor.sounds import play_sound
+from nestor.speech_to_text import load_speech_to_text
+from nestor.speech_to_text import load_wake_speech_to_text
 from nestor.trains import RailData
 SAMPLE_RATE = 16000  # openWakeWord and Whisper both work at 16 kHz
 FRAME_SECONDS = FRAME_LENGTH / SAMPLE_RATE
@@ -47,11 +47,15 @@ WAKE_PHRASE = re.compile(r"\b(hey|hi|okay|ok),?\s+(john|jon|jarvis)\b[,.!?]*", r
 WAKE_START = re.compile(r"^\W*(?:\w+\W+)?(hey|hi|okay|ok)\W+(john|jon)\b\W*", re.IGNORECASE)
 # A request ending in ", John" (the comma is how speech-to-text writes talking to John, not about him)
 WAKE_END = re.compile(r"^\W*(\w.*?)\s*,\s*(john|jon)\W*$", re.IGNORECASE)
-# Morning and night greetings, which wake John even without a comma ("goodnight John")
-GREETING_END = re.compile(r"^\W*((?:good\s*)?(?:morning|night)|start (?:my|the) (?:day|morning))\W+(john|jon)\W*$",
-                          re.IGNORECASE)
+# Morning and night greetings, which wake John even without a comma ("goodnight John"; Vosk sometimes hears "good
+# morning" as "the morning")
+GREETING_END = re.compile(
+    r"^\W*((?:(?:good|the)\s*)?(?:morning|night)|start (?:my|the) (?:day|morning))\W+(john|jon)\W*$", re.IGNORECASE)
+# A short request ending in John with no comma, for speech-to-text that writes no punctuation (Vosk)
+PLAIN_END = re.compile(r"^\W*(\w.*?)\s+(john|jon)\W*$", re.IGNORECASE)
 MAX_REQUEST_WORDS = 15  # Longer phrases ending in ", John" are probably talk, not a request
-MORNING = re.compile(r"^(good )?morning|start (my|the) (day|morning)|i'?m up$")
+MAX_PLAIN_REQUEST_WORDS = 6  # Without a comma, only short phrases ending in John count, to limit waking by mistake
+MORNING = re.compile(r"^((good|the) )?morning|start (my|the) (day|morning)|i'?m up$")
 NIGHT = re.compile(r"^(good ?night|night|going to bed)$")
 log = logging.getLogger(__name__)
 
@@ -61,16 +65,19 @@ def without_wake_phrase(heard):
 
 # If John was called, what was asked ("" if nothing more was said); None if he wasn't. He's called by "Hey John" at
 # the start (allowing one word before it, like "um"), by a short request ending in ", John", or by "good morning John"
-# / "goodnight John".
-def after_wake_words(heard):
+# / "goodnight John". plain is for speech-to-text without punctuation, where a very short request ending in John counts.
+def after_wake_words(heard, plain=False):
     start = WAKE_START.search(heard)
     end = WAKE_END.search(heard) or GREETING_END.search(heard)
+    plain_end = PLAIN_END.search(heard) if plain else None
 
-    # "Hey John" first, then a request or greeting ending with John
+    # "Hey John" first, then a request or greeting ending with John, then (without punctuation) a short phrase
     if start:
         return heard[start.end():].strip()
     elif end and len(end.group(1).split()) <= MAX_REQUEST_WORDS:
         return end.group(1).strip()
+    elif plain_end and len(plain_end.group(1).split()) <= MAX_PLAIN_REQUEST_WORDS:
+        return plain_end.group(1).strip()
     return None
 
 # The routine some words ask for straight away, with no need for Claude: "start_my_day" for "good morning" or
@@ -136,21 +143,19 @@ class John:
             self.threshold = float(self.settings.get("john_wake_threshold", 0.5))
             self.speech = VAD()
             self.wake_speech = VAD()  # Its own detector, for noticing phrases that might start with "Hey John"
-            self.quick_whisper = None if model else WhisperModel(self.settings.get("john_wake_whisper", "tiny.en"),
-                                                                 device="cpu", compute_type="int8")
-            self.recorder = pvrecorder.PvRecorder(frame_length=FRAME_LENGTH,
-                                                  device_index=find_microphone(self.settings.get("microphone", "")))
-            log.info("Loading speech-to-text (%s); the first time downloads it",
-                     self.settings.get("whisper_model", "small.en"))
-            self.whisper = WhisperModel(self.settings.get("whisper_model", "small.en"), device="cpu",
-                                        compute_type="int8")
+            self.recorder = open_microphone(self.settings.get("microphone", ""))
+            log.info("Loading speech-to-text (%s); the first time may download it",
+                     self.settings.get("speech_to_text", "whisper"))
+            self.speech_to_text = load_speech_to_text(self.settings)
+            self.wake_speech_to_text = None if model else load_wake_speech_to_text(self.settings, self.speech_to_text)
+            self.plain = not self.speech_to_text.punctuates
             rail = RailData(self.secrets.get("NJT_USERNAME"), self.secrets.get("NJT_PASSWORD"))
             self.brain = Brain(self.announcer, self.settings, self.secrets["ANTHROPIC_API_KEY"], rail)
         except Exception as error:
             log.error("Hey John couldn't start: %s", error)
             return
-        log.info("Hey John is listening on %s (%s)", self.recorder.selected_device,
-                 "trained wake word model" if self.wake_word else "listening for the words")
+        log.info("Hey John is listening on %s (%s, %s)", self.recorder.selected_device,
+                 "trained wake word model" if self.wake_word else "listening for the words", self.speech_to_text.name)
         self.gap_speech = VAD()  # Its own detector, for "stop" between bursts of ringing
         recent = deque(maxlen=LEAD_IN_FRAMES)
         self.recorder.start()
@@ -180,8 +185,8 @@ class John:
                 self.recorder.start()
 
     # True if "Hey John" was just heard. With a trained model, it scores each moment; otherwise, whenever the speech
-    # detector hears a phrase (and the speaker isn't talking), a tiny Whisper model checks whether it starts with "Hey
-    # John". Anything said after it in the same breath is kept in self.first_words.
+    # detector hears a phrase (and the speaker isn't talking), quick speech-to-text (a tiny Whisper model, or Vosk)
+    # checks whether it starts with "Hey John". Anything said after it in the same breath is kept in self.first_words.
     def heard_wake_word(self, frame, recent):
         self.first_words = None
 
@@ -201,15 +206,19 @@ class John:
             return False
         self.wake_speech.reset_states()
         samples = self.record(1.0, lead_in=list(recent), max_seconds=WAKE_PHRASE_SECONDS, quietly=True)
-        rest = after_wake_words(self.transcribe(samples, self.quick_whisper)) if samples else None
+        quick_words = self.transcribe(samples, self.wake_speech_to_text) if samples else ""
+        rest = after_wake_words(quick_words, self.plain) if samples else None
 
         # Not "Hey John": ignored (and not logged, as it's just people talking)
         if rest is None:
             return False
 
-        # More was said in the same breath: hear it properly with the bigger model
-        if rest:
-            self.first_words = after_wake_words(self.transcribe(samples)) or without_wake_phrase(rest) or None
+        # More was said in the same breath: hear it properly with the bigger model (Vosk already used its only one)
+        if rest and self.wake_speech_to_text is self.speech_to_text:
+            self.first_words = rest
+        elif rest:
+            heard = self.transcribe(samples)
+            self.first_words = after_wake_words(heard, self.plain) or without_wake_phrase(rest) or None
         log.info("Heard \"Hey John\"%s", f" and: {self.first_words!r}" if self.first_words else "")
         return True
 
@@ -403,12 +412,10 @@ class John:
             log.info("Recorded %.1f s (speech %.1f s)", len(recorded) * FRAME_SECONDS, speech_seconds)
         return [sample for frame in recorded for sample in frame]
 
-    # Turn recorded samples into text with faster-whisper ("" if nothing was said); model is the speech-to-text model
-    # to use (the big one unless given)
-    def transcribe(self, samples, model=None):
-        audio = numpy.array(samples, dtype=numpy.float32) / 32768.0
-        segments, info = (model or self.whisper).transcribe(audio, language="en", beam_size=1, vad_filter=True)
-        return " ".join(segment.text.strip() for segment in segments).strip()
+    # Turn recorded samples into text ("" if nothing was said); speech_to_text is the one to use (the main one unless
+    # given)
+    def transcribe(self, samples, speech_to_text=None):
+        return (speech_to_text or self.speech_to_text).transcribe(samples)
 
     # Ask the brain, playing the thinking sound if it takes a while, and the error sound if it fails
     def answer(self, heard):

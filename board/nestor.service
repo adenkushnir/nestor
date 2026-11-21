@@ -1,0 +1,16 @@
+# Runs Nestor on the Tinker Board from power-on, as Aden's account, restarting it if it stops (see board/README.md)
+[Unit]
+Description=Nestor
+Wants=network-online.target
+After=network-online.target sound.target
+
+[Service]
+User=aden
+WorkingDirectory=/home/aden/nestor
+ExecStart=/home/aden/nestor/.venv/bin/python -m nestor
+Environment=PYTHONUNBUFFERED=1
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

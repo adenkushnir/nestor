@@ -3,6 +3,7 @@
 import datetime
 import json
 import logging
+import os
 from flask import Flask
 from flask import Response
 from flask import jsonify
@@ -31,6 +32,7 @@ WAIT_TIMEOUT_SECONDS = 180
 MAX_REQUEST_BYTES = 1_000_000  # Datebook's snapshot is the biggest thing sent in
 HEARTBEAT_SECONDS = 25  # The live feed sends a keep-alive this often, so idle connections aren't cut
 LOCAL_ADDRESSES = ("127.0.0.1", "::1")
+PAGES_DIR = os.path.join(os.path.dirname(__file__), "pages")  # Web pages Nestor shows, like the wall screen's
 log = logging.getLogger(__name__)
 
 # Read the request's JSON object or form fields; returns (payload, error response or None). Bodies that aren't UTF-8
@@ -343,6 +345,11 @@ def create_app(announcer, settings):
     @app.get("/health")
     def health():
         return jsonify(status="ok", speaker=announcer.speaker.name)
+
+    # The page on the wall screen: for now a clock that says whether Nestor is running, until the wall display is built
+    @app.get("/screen")
+    def screen():
+        return send_from_directory(PAGES_DIR, "screen.html")
 
     # Pair a phone: {"code": "123456", "device": "Pixel 9"} with the code from python -m nestor --pair; answers
     # {"token": "..."}, which the phone sends with every Datebook call after that. A computer (the Claude connector)

@@ -1,0 +1,8 @@
+# Nestor's Python packages on the Tinker Board, on top of Debian's own (see install-nestor.sh): no faster-whisper or
+# pvrecorder there (neither runs on its processor), Vosk instead, and openWakeWord is installed without its extras
+pychromecast>=14.1
+edge-tts>=7.3
+anthropic>=2.10
+vosk>=0.3.45
+# Debian's httpcore is too old for the h11 that anthropic brings in
+httpcore>=1.0.9

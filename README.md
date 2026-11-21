@@ -18,7 +18,8 @@ PC on the same Wi-Fi.
   the wall screen.
 - **Datebook** (the [Datebook](https://github.com/adenkushnir/text-to-calendar) phone app): its leave-by alerts,
   travel changes and reminders spoken at home, and its plans, lists and reminders in the briefing.
-- **Later:** Nestor running 24/7 on an ASUS Tinker Board with a 7" wall screen showing your day in Datebook's look.
+- **The Tinker Board:** Nestor can run 24/7 on an ASUS Tinker Board with a 7" screen and a USB microphone (see
+  [board/README.md](board/README.md)). Later, that screen shows your day in Datebook's look.
 
 ## How it works
 
