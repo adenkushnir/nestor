@@ -19,6 +19,7 @@ SCENES = {0: "clear", 1: "clear", 2: "partly", 3: "overcast", 45: "fog", 48: "fo
           77: "snow", 85: "snow", 86: "snow", 95: "storm", 96: "storm", 99: "storm"}
 LIST_WORDS = (("bills", "bill", "bills"), ("assignments", "assignment", "assignments"),
               ("packages", "package", "packages"), ("trips", "trip", "trips"))
+CHIP_TEMP_PATH = "/sys/class/thermal/thermal_zone0/temp"  # The board's chip temperature (Linux), in thousandths
 log = logging.getLogger(__name__)
 
 # The scene picture for a weather code ("wet" for rain and drizzle)
@@ -54,6 +55,26 @@ def read_moment(text):
         return datetime.datetime.fromisoformat(text) if text else None
     except ValueError:
         return None
+
+# A snapshot item with its title as the wall shows it, and its class's nickname in "class" (Canvas items)
+def titled(item, class_names, lookup):
+    title, class_name = datebook.split_class(item.get("title", ""), class_names, lookup)
+    return dict(item, title=title, **{"class": class_name})
+
+# Datebook's snapshot with titles as John says them: Canvas assignments without their course codes (the class's
+# nickname kept in "class"), and events titled with a class's registrar name shown by its nickname
+def readable(snapshot, class_names):
+    lookup = datebook.class_lookup(snapshot, class_names)
+    copy = dict(snapshot)
+    copy["events"] = [titled(item, class_names, lookup) for item in snapshot.get("events") or []
+                      if isinstance(item, dict)]
+    lists = dict(snapshot.get("lists") or {})
+
+    # Bills and assignments tidied the same way
+    for part in ("bills", "assignments"):
+        lists[part] = [titled(item, class_names, lookup) for item in lists.get(part) or [] if isinstance(item, dict)]
+    copy["lists"] = lists
+    return copy
 
 # The next timed event today that hasn't started (None when nothing else has a time today)
 def next_event(events, now):
@@ -242,6 +263,7 @@ class Wall:
         self.rail = rail
         self.lock = threading.Lock()
         self.weather = None
+        self.hours = []
         self.weather_at = None
         self.board = []
         self.board_at = None
@@ -260,7 +282,9 @@ class Wall:
 
         # A failed check keeps the last weather
         try:
-            self.weather = weather.forecast(location, self.settings.get("temperature_unit", "fahrenheit"))
+            unit = self.settings.get("temperature_unit", "fahrenheit")
+            self.weather = weather.forecast(location, unit)
+            self.hours = weather.hourly(location, unit)
         except Exception as error:
             log.warning("The wall's weather didn't update: %s", error)
         self.weather_at = now
@@ -301,15 +325,17 @@ class Wall:
         # One page asking at a time, so slow sources are only fetched once
         with self.lock:
             forecast = self.current_weather(now)
-            snapshot = datebook.read_state(now)
+            snapshot = readable(datebook.read_state(now), self.settings.get("class_names"))
             trip_names = snapshot.get("trip") or {}
             trip = (trip_names.get("from") or self.settings.get("train_from", ""),
                     trip_names.get("to") or self.settings.get("train_to", ""))
             board = self.current_board(trip, now)
             left = self.left
+            hours = self.hours
         rows = train_rows(board, trip[1], left, now) if trip[1] else []
         event = next_event(snapshot.get("events") or [], now)
         music = spotify.music.now if spotify.music else None
+        nestor_reminders = reminders.todays_reminders(now.date())
         return {
             "now": now.isoformat(timespec="seconds"),
             "weather": forecast and {"temp": forecast["now"], "unit": forecast["unit"],
@@ -318,13 +344,17 @@ class Wall:
                                      "sunrise": forecast["sunrise"], "sunset": forecast["sunset"]},
             "datebook": snapshot["connected"],
             "next": next_card(event, now, rows) if event else None,
-            "later": later_today(snapshot, now, event, reminders.todays_reminders(now.date())),
+            "later": later_today(snapshot, now, event, nestor_reminders),
             "counts": list_counts(snapshot.get("lists")),
             "updated": updated_line(snapshot, now),
             "trains": {"title": f"{trip_names.get('from_name') or trip[0]} → {trip_names.get('to_name') or trip[1]}",
                        "rows": rows} if trip[0] and trip[1] and self.rail else None,
             "music": music if music and music.get("playing") else None,
             "foil": foil_rows(snapshot.get("fencing"), now),
+            "big": {"week": week_screen(snapshot, now, nestor_reminders),
+                    "weather": weather_screen(hours, forecast, now),
+                    "fencing": foil_screen(snapshot.get("fencing"), now)},
+            "chip_temp": chip_temperature(),
         }
 
 # "Rain from 4 PM" for the weather line, only while it's dry now and rain is likely later today (None otherwise)
@@ -336,3 +366,224 @@ def wet_later(forecast):
         hour = int(forecast["rain_from"][:2])
         return f"Rain from {hour % 12 or 12} {'AM' if hour < 12 else 'PM'}"
     return None
+
+# The parts of the day for the weather screen: name, first hour, the hour after the last
+DAY_PARTS = (("Morning", 6, 12), ("Afternoon", 12, 17), ("Evening", 17, 21), ("Night", 21, 30))
+WEATHER_HOURS = 12  # The weather screen covers this many hours
+WET = 50  # A rain chance from this percent counts as rain coming
+SNOW_CODES = {71, 73, 75, 77, 85, 86}
+STORM_CODES = {95, 96, 99}
+
+# An hour as the wall says it: "4 PM", "noon", "midnight"
+def hour_text(hour):
+    hour %= 24
+
+    # Noon and midnight have names; other hours a number and AM or PM
+    if hour == 12:
+        return "noon"
+    elif hour == 0:
+        return "midnight"
+    return f"{hour % 12} {'AM' if hour < 12 else 'PM'}"
+
+# An hour's place in the day's parts, with the small hours after midnight counted as part of the night (24 to 29)
+def night_hour(hour):
+    clock = int(hour["time"][11:13])
+    return clock if clock >= 6 else clock + 24
+
+# What falls in a list of hours: "Snow", "Storms" or "Rain" (by the codes of the wet ones)
+def wet_kind(hours):
+    codes = {hour["code"] for hour in hours if hour["rain"] >= WET}
+
+    # Snow wins, then storms, then plain rain
+    if codes & SNOW_CODES:
+        return "Snow"
+    elif codes & STORM_CODES:
+        return "Storms"
+    return "Rain"
+
+# The weather screen in words: a big line about rain (or none), a line under it, and the parts of the day in the next
+# 12 hours, each with its temperatures, words and rain chance
+def weather_screen(hours, forecast, now):
+    coming = [hour for hour in hours if datetime.datetime.fromisoformat(hour["time"]) >= now.replace(
+        minute=0, second=0, microsecond=0)][:WEATHER_HOURS]
+
+    # Without the hours there's nothing to say
+    if not coming:
+        return None
+    wet = [hour for hour in coming if hour["rain"] >= WET]
+    peak = max(coming, key=lambda hour: hour["rain"])
+    peak_hour = int(peak["time"][11:13])
+
+    # Rain (or snow, or storms) coming, falling now, or a dry spell
+    if wet and wet[0] is coming[0]:
+        dry_again = next((hour for hour in coming[coming.index(wet[-1]) + 1:]), None)
+        banner = f"{wet_kind(coming)} now"
+        under = f"Heaviest around {hour_text(peak_hour)} ({peak['rain']}%)" + (
+            f", easing by {hour_text(int(dry_again['time'][11:13]))}." if dry_again else ", on and off all evening.")
+    elif wet:
+        start = int(wet[0]["time"][11:13])
+        banner = f"{wet_kind(coming)} from {hour_text(start)}"
+        under = f"Heaviest around {hour_text(peak_hour)} ({peak['rain']}%). Take an umbrella if you're out then."
+    else:
+        banner = f"No rain in the next {WEATHER_HOURS} hours"
+        known = forecast and forecast.get("now") is not None
+        under = f"{forecast['now']}° and {forecast['conditions']} now." if known else ""
+    parts = []
+
+    # The parts of the day the next 12 hours cover, in order (at most 3)
+    for name, first, last in DAY_PARTS:
+        part = [hour for hour in coming if first <= night_hour(hour) < last]
+
+        # Only parts with hours in the window
+        if part:
+            parts.append(day_part(name, part, last))
+    parts.sort(key=lambda part: part["order"])
+    return {"banner": banner, "under": under,
+            "parts": [{key: value for key, value in part.items() if key != "order"} for part in parts[:3]]}
+
+# One part of the day on the weather screen: its name, hours, temperatures, words and highest rain chance
+def day_part(name, hours, last):
+    first_temp = hours[0]["temp"]
+    last_temp = hours[-1]["temp"]
+    top = max(hour["temp"] for hour in hours)
+    rain = max(hour["rain"] for hour in hours)
+    wet = [hour for hour in hours if hour["rain"] >= WET]
+    start = int(hours[0]["time"][11:13])
+    stop = min(night_hour(hours[-1]) + 1, last)  # The part ends at its own end, or where the 12 hours do
+
+    # The temperatures: rising to a peak in the middle, or from start to end
+    if top >= max(first_temp, last_temp) + 2:
+        temps = f"up to {top}°"
+    elif first_temp == last_temp:
+        temps = f"{first_temp}°"
+    else:
+        temps = f"{first_temp}° → {last_temp}°"
+
+    # The words: rain (from when, or all along), or the most common sky
+    if wet and wet[0] is hours[0]:
+        words = f"{wet_kind(hours)} on and off" if len(wet) < len(hours) else wet_kind(hours)
+    elif wet:
+        words = f"{wet_kind(hours)} from {hour_text(int(wet[0]['time'][11:13]))}"
+    else:
+        codes = [hour["code"] for hour in hours]
+        words = "Dry, " + weather.WEATHER_WORDS.get(max(set(codes), key=codes.count), "mixed")
+    return {"name": name, "span": f"{hour_text(start)} – {hour_text(stop)}", "temps": temps, "words": words,
+            "rain": rain, "order": hours[0]["time"]}
+
+# One line for an item on a coming day of the week screen: "4:00 PM · Study group · Library room 2"
+def week_line(time_text, title, place=""):
+    return " · ".join(part for part in (time_text, title, place) if part)
+
+# The week screen: today in full (what's done faded; places, when to leave and what to bring), then the next 6 days
+def week_screen(snapshot, now, nestor_reminders):
+    today = now.date()
+    rows = []
+
+    # Today's events, past and still to come
+    for event in snapshot.get("events") or []:
+        start = read_moment(event.get("start"))
+
+        # Only today's
+        if not start or start.date() != today:
+            continue
+        timed = not event.get("all_day")
+        leave_by = read_moment(event.get("leave_by"))
+        travel = f" · {event['travel']}" if event.get("travel") else ""
+        leave = f"Leave by {clock_text(leave_by)}{travel}" if leave_by and timed else ""
+        rows.append((start.strftime("%H:%M") if timed else "", clock_text(start) if timed else "Today",
+                     event.get("title") or "", event.get("place") or "", leave, event.get("bring") or "", "",
+                     timed and start < now))
+
+    # Today's reminders, Datebook's and Nestor's
+    for reminder in snapshot.get("reminders") or []:
+        at = read_moment(reminder.get("at"))
+
+        # Only today's
+        if at and at.date() == today:
+            rows.append((at.strftime("%H:%M"), clock_text(at), reminder.get("text") or "", "", "", "", "Reminder",
+                         at < now))
+
+    # Nestor's reminders are "18:00" times for today
+    for reminder in nestor_reminders:
+        at = datetime.datetime.combine(today, datetime.time.fromisoformat(reminder["time"]))
+        rows.append((reminder["time"], clock_text(at), reminder["text"], "", "", "", "Reminder", at < now))
+    lists = snapshot.get("lists") or {}
+
+    # Bills and assignments due today
+    for part in ("bills", "assignments"):
+        # Each one due today
+        for item in lists.get(part) or []:
+            due = read_moment(item.get("due"))
+
+            # Only those due today
+            if due and due.date() == today:
+                rows.append(("", "Today", item.get("title") or "", item.get("class") or "", "", "", "Due", False))
+    rows.sort(key=lambda row: row[0])
+    days = []
+
+    # The next 6 days, each with its events, reminders and what's due
+    for ahead in range(1, 7):
+        day = today + datetime.timedelta(days=ahead)
+        lines = []
+
+        # The day's events in time order (all-day ones first)
+        for event in sorted(snapshot.get("events") or [], key=lambda event: event.get("start") or ""):
+            start = read_moment(event.get("start"))
+
+            # Only that day's
+            if not start or start.date() != day:
+                continue
+            elif event.get("all_day"):
+                lines.append(week_line("", event.get("title") or "", "all day"))
+            else:
+                lines.append(week_line(clock_text(start), event.get("title") or "", event.get("place") or ""))
+
+        # Bills and assignments due that day
+        for part, word in (("bills", "due"), ("assignments", "due")):
+            # Each one due that day
+            for item in lists.get(part) or []:
+                due = read_moment(item.get("due"))
+
+                # Only that day's, with its class and its time when it has one
+                if due and due.date() == day:
+                    timed = len(item.get("due", "")) > 10
+                    name = item.get("title") or ""
+                    name += f" ({item['class']})" if item.get("class") else ""
+                    lines.append(f"{name} {word}" + (f" · {clock_text(due)}" if timed else ""))
+        days.append({"day": f"{day.strftime('%a %b')} {day.day}", "items": lines})
+    return {"today_name": now.strftime("%A"),
+            "today": [{"time": time, "title": title, "place": place, "leave": leave, "bring": bring, "tag": tag,
+                       "past": past} for key, time, title, place, leave, bring, tag, past in rows],
+            "days": days}
+
+# The men's foil screen: this week's events by day, LIVE with today's stage (just the schedule)
+def foil_screen(fencing, now):
+    days = {}
+    week_end = now.date() + datetime.timedelta(days=7)
+
+    # Each event this week that isn't over
+    for event in fencing or []:
+        start = read_moment(event.get("start"))
+        end = read_moment(event.get("end")) or start
+
+        # Only this week's, not over yet
+        if not start or start.date() > week_end or end.date() < now.date():
+            continue
+        first = start.strftime("%a")
+        last = end.strftime("%a")
+        timed = len(event.get("start", "")) > 10
+        label = f"{start.strftime('%a %b')} {start.day}"
+        days.setdefault((start.date(), label), []).append({
+            "name": event.get("name") or "", "where": event.get("where") or "",
+            "days": first if first == last else f"{first}–{last}", "time": clock_text(start) if timed else "",
+            "live": foil_live(event, now), "stage": event.get("stage") or ""})
+    return [{"day": label, "events": events} for (date, label), events in sorted(days.items())]
+
+# The chip's temperature in °C on the Tinker Board (None elsewhere), so the wall can go lite when it runs hot
+def chip_temperature():
+    # Only Linux boards have it
+    try:
+        with open(CHIP_TEMP_PATH) as reading:
+            return round(int(reading.read().strip()) / 1000)
+    except (OSError, ValueError):
+        return None

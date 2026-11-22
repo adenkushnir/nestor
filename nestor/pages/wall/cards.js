@@ -11,6 +11,11 @@ let fetchedAt = 0;
 let live = {john: "idle", ringing: null, sleeping: false, alarm: null, timers: []};
 let wokeUntil = 0;
 let toastUntil = 0;
+const BIG_SECONDS = 30;  // A bigger screen closes by itself after this long
+const BIG_TITLES = {days: "Your week", weather: "Weather · next 12 hours", fencing: "Men's foil this week"};
+const BIG_VIEWS = {week: "days", weather: "weather", fencing: "fencing"};  // John's names for the screens
+const big = {open: null, closesAt: 0};
+let bigSeen = null;  // The last bigger-screen request from John that was acted on
 
 // Make text safe to put in the page (titles and places come from your calendar)
 function esc(text) {
@@ -42,7 +47,7 @@ function weatherLine() {
     return "";
   }
   const rain = weather.rain_from ? `<span class="rainnote">· ${esc(weather.rain_from)}</span>` : "";
-  return `<div class="row" style="margin-top:8px">` +
+  return `<div class="row tapme" data-open="weather" style="margin-top:8px">` +
     `<span style="font-size:26px;font-weight:600">${esc(weather.temp)}°</span>` +
     `<span style="font-size:15px">${esc(weather.words)}</span>${rain}</div>`;
 }
@@ -107,7 +112,8 @@ function foilCard() {
     `${esc(event.day)}</span><span class="grow fname"><b>${esc(event.name)}</b>` +
     `<span class="muted"> · ${esc(event.where)}</span></span>` +
     `<span class="muted">${esc(event.time)}</span></div>`).join("");
-  return `<div class="glass pad"><span class="label">Men's foil</span><div style="margin-top:3px">${rows}</div></div>`;
+  return `<div class="glass pad tapme" data-open="fencing"><span class="label">Men's foil</span>` +
+    `<div style="margin-top:3px">${rows}</div></div>`;
 }
 
 // The now-playing card: album art, song, artist and album, and how far it's got (show only, no controls)
@@ -194,7 +200,7 @@ function renderCards() {
     '<span id="ampm" style="font-size:24px;padding-bottom:8px"></span></div>' +
     `<div id="date" style="font-size:21px;margin-top:8px"></div>${weatherLine()}` +
     '<div class="chips" id="chips"></div></div>';
-  const later = `<div class="glass pad stack${below > 1 ? " tight" : ""}" ` +
+  const later = `<div class="glass pad stack tapme${below > 1 ? " tight" : ""}" data-open="days" ` +
     'style="flex:1;gap:2px;min-height:0;overflow:hidden">' +
     `<div class="row"><span class="label">Later today</span>${header}</div>${laterRows()}</div>`;
   const rail = later + (data.trains ? trainCard() : "") + (data.foil.length ? foilCard() : "") +
@@ -219,6 +225,8 @@ function showClock() {
     document.getElementById("wallToast").classList.remove("show");
     toastUntil = 0;
   }
+
+  drawBig();
 
   // The cards haven't been drawn yet
   if (!clock) {
@@ -246,10 +254,16 @@ async function refresh() {
 
     // Only a good answer replaces what's showing
     if (reply.ok) {
+      const first = !data;
       data = await reply.json();
       fetchedAt = Date.now();
       setScene(data.weather);
       renderCards();
+
+      // ?open=days (or weather, fencing) opens a bigger screen when the page loads, for checking it
+      if (first && new URLSearchParams(location.search).get("open")) {
+        openBig(new URLSearchParams(location.search).get("open"));
+      }
     }
   } catch (error) {
     console.warn("The wall couldn't reach Nestor:", error);
@@ -276,13 +290,122 @@ async function ringButton(what) {
   }
 }
 
-// Taps on the wall: Stop and Snooze, and a touch on the night clock shows the full wall for 30 seconds
+// The week screen: today in full (what's done faded), then the next 6 days
+function daysView() {
+  const week = data.big.week;
+  const today = week.today.map((row) => `<div class="bev${row.past ? " past" : ""}"><span class="bt">` +
+    `${esc(row.time)}</span><span class="grow"><b>${esc(row.title)}</b>` +
+    `${row.tag ? `<span class="chip">${esc(row.tag)}</span>` : ""}` +
+    `${row.place ? `<span class="muted"> · ${esc(row.place)}</span>` : ""}` +
+    `${row.leave ? `<div class="bleave">${esc(row.leave)}</div>` : ""}` +
+    `${row.bring ? `<div class="muted">Bring: ${esc(row.bring)}</div>` : ""}</span></div>`).join("");
+  const days = week.days.map((day) => `<div class="bday"><span class="bdname">${esc(day.day)}</span>` +
+    `<span class="grow">${day.items.length ? day.items.map(esc).join("<br>") : '<span class="muted">Nothing on</span>'}` +
+    "</span></div>").join("");
+  return `<div class="bcols"><div><span class="label">Today · ${esc(week.today_name)}</span>` +
+    `${today || '<div class="muted" style="margin-top:6px">Nothing today</div>'}</div>` +
+    `<div><span class="label">Coming up</span>${days}</div></div>`;
+}
+
+// The weather screen in words: the big rain line, the line under it, and the parts of the day
+function weatherView() {
+  const weather = data.big.weather;
+
+  // The forecast may not have come in yet
+  if (!weather) {
+    return '<div class="sbanner">The forecast isn\'t in yet</div>';
+  }
+  const parts = weather.parts.map((part) => `<div class="spart"><span class="sname">${esc(part.name)}</span>` +
+    `<span class="sspan">${esc(part.span)}</span><span class="stemps">${esc(part.temps)}</span>` +
+    `<span class="swords">${esc(part.words)}</span><span class="lbar"><i style="width:${Number(part.rain) || 0}%">` +
+    "</i></span></div>").join("");
+  return `<div class="sbanner">${esc(weather.banner)}</div><div class="ssub">${esc(weather.under)}</div>` +
+    `<div class="sparts">${parts}</div>`;
+}
+
+// The men's foil screen: this week's events by day, LIVE with today's stage (just the schedule)
+function fencingView() {
+  const days = data.big.fencing;
+
+  // A week with nothing on says so
+  if (!days.length) {
+    return '<div class="sbanner">No men\'s foil this week</div>';
+  }
+  return days.map((day) => `<div class="fbday"><span class="label">${esc(day.day)}</span>` + day.events.map((event) =>
+    `<div class="fbev">${event.live ? '<span class="fday live">LIVE</span>' :
+      `<span class="fbtime">${esc(event.time)}</span>`}<span class="grow"><b>${esc(event.name)}</b>` +
+    `<div class="muted">${esc([event.where, event.days].filter(Boolean).join(" · "))}` +
+    `${event.live && event.stage ? ` · now: ${esc(event.stage)}` : ""}</div></span></div>`).join("") +
+    "</div>").join("");
+}
+
+// Open a bigger screen over the wall, closing by itself after 30 seconds; the hare steps aside to the big tree
+function openBig(kind) {
+  // Only screens there's data for
+  if (!data || !BIG_TITLES[kind]) {
+    return;
+  }
+  big.open = kind;
+  big.closesAt = Date.now() + BIG_SECONDS * 1000;
+  wall.bigOpen = true;
+  renderBig();
+}
+
+// Close the bigger screen and go back to the wall
+function closeBig() {
+  big.open = null;
+  wall.bigOpen = false;
+  renderBig();
+}
+
+// Draw the bigger screen, or nothing when none is open
+function renderBig() {
+  const holder = document.getElementById("big");
+  holder.classList.toggle("open", Boolean(big.open));
+
+  // Nothing open: empty
+  if (!big.open) {
+    holder.innerHTML = "";
+    return;
+  }
+  const views = {days: daysView, weather: weatherView, fencing: fencingView};
+  holder.innerHTML = `<div class="bigcard glass"><div class="bighead"><span class="bigtitle">${BIG_TITLES[big.open]}` +
+    '</span><span class="grow"></span><span class="bigclose" id="bigCountdown"></span>' +
+    '<button class="ghost" type="button" data-big="close">Close</button></div>' +
+    `<div class="bigbody">${views[big.open]()}</div></div>`;
+  drawBig();
+}
+
+// Count down to closing by itself, and close when the time is up
+function drawBig() {
+  // Only while a screen is open
+  if (!big.open) {
+    return;
+  }
+  const left = Math.ceil((big.closesAt - Date.now()) / 1000);
+
+  // Time's up: back to the wall
+  if (left <= 0) {
+    closeBig();
+    return;
+  }
+  document.getElementById("bigCountdown").textContent = `Closes in ${left} s`;
+}
+
+// Taps on the wall: Stop and Snooze, the bigger screens' cards and Close, and a touch on the night clock shows the full
+// wall for 30 seconds
 function onTap(event) {
   const button = event.target.closest("[data-ring]");
+  const close = event.target.closest("[data-big]");
+  const open = event.target.closest("[data-open]");
 
-  // A ring button, or the night clock
+  // A ring button, Close, a card that opens its screen, or the night clock
   if (button) {
     ringButton(button.dataset.ring);
+  } else if (close) {
+    closeBig();
+  } else if (open && !big.open) {
+    openBig(open.dataset.open);
   } else if (event.target.closest("#night")) {
     wokeUntil = Date.now() + WAKE_SECONDS * 1000;
     drawNight();
@@ -299,10 +422,30 @@ function followLive() {
     wall.john = live.john;
     wall.ringing = Boolean(live.ringing);
     wall.sleeping = live.sleeping;
+    const request = live.big;
 
-    // A ring starting, ending or changing redraws the left card
+    // A ring starting, ending or changing redraws the left card (and a new ring closes a bigger screen)
     if (data && JSON.stringify(before.ringing) !== JSON.stringify(live.ringing)) {
       renderCards();
+
+      // Stop and Snooze must be reachable
+      if (live.ringing) {
+        closeBig();
+      }
+    }
+
+    // A new ask from John opens or closes a bigger screen (one asked before the page loaded is only noted)
+    if (bigSeen === null) {
+      bigSeen = request ? request.id : 0;
+    } else if (request && request.id !== bigSeen) {
+      bigSeen = request.id;
+
+      // Close, or open the screen asked for
+      if (request.view === "close") {
+        closeBig();
+      } else {
+        openBig(BIG_VIEWS[request.view]);
+      }
     }
     showClock();
   });

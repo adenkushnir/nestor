@@ -115,3 +115,18 @@ def forecast(setting, temperature_unit="fahrenheit", days_ahead=0):
             "low": round(daily["temperature_2m_min"][days_ahead]),
             "rain_chance": daily["precipitation_probability_max"][days_ahead], "rain_from": rain_from,
             "sunrise": daily["sunrise"][days_ahead][11:16], "sunset": daily["sunset"][days_ahead][11:16]}
+
+# The forecast hour by hour from this hour on, for the wall's weather screen: a list of {"time": "2026-11-20T15:00",
+# "temp": 61, "rain": 20, "code": 3} (rain is the chance in percent)
+def hourly(setting, temperature_unit="fahrenheit"):
+    location = find_location(setting)
+    answer = fetch_json(FORECAST_URL, {
+        "latitude": location["latitude"], "longitude": location["longitude"], "timezone": "auto",
+        "current": "temperature_2m", "hourly": "temperature_2m,precipitation_probability,weather_code",
+        "temperature_unit": temperature_unit, "forecast_days": 2})
+    this_hour = answer["current"]["time"][:13]
+    hours = answer["hourly"]
+    return [{"time": moment, "temp": round(temp), "rain": rain or 0, "code": code}
+            for moment, temp, rain, code in zip(hours["time"], hours["temperature_2m"],
+                                                hours["precipitation_probability"], hours["weather_code"])
+            if moment[:13] >= this_hour and temp is not None]

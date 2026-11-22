@@ -20,6 +20,9 @@ const IDLES = ["watch", "tie", "look"];
 const WALK_FRAMES = ["cycle2-1", "cycle2-2", "cycle2-3", "cycle2-4", "cycle2-5", "cycle2-6", "cycle2-7", "cycle2-8"];
 // The hare's poses: each cut-out's size at the standing height, and where his eyes are (fractions)
 const POSES = {standing: 230, poses: {
+  "umbrella-watch": {"w": 144, "h": 262, "eyes": [[0.432, 0.31], [0.517, 0.304]]},
+  "snow-watch": {"w": 65, "h": 230, "eyes": [[0.29, 0.265], [0.477, 0.261]]},
+  "fog-watch": {"w": 65, "h": 230, "eyes": [[0.328, 0.263], [0.497, 0.259]]},
   "stand": {"w": 65, "h": 230, "eyes": [[0.287, 0.252], [0.513, 0.252]]},
   "watch": {"w": 65, "h": 230, "eyes": [[0.302, 0.264], [0.5, 0.26]]},
   "tie": {"w": 65, "h": 230, "eyes": [[0.362, 0.259], [0.508, 0.252]]},
@@ -78,7 +81,7 @@ const GLINTS = [[372, 300], [405, 293], [440, 288], [465, 286], [242, 321], [318
 const STARS = Array.from({length: 26}, (_, index) => [130 + (index * 137) % 330, 12 + (index * 71) % 180, index * 0.7]);
 // What the rest of the page tells the scene: the weather, the sun, John, a ring, the night clock, the lite look
 const wall = {weather: "partly", sunrise: 405, sunset: 1050, john: "idle", ringing: false, night: false,
-  sleeping: false, lite: false};
+  sleeping: false, bigOpen: false, lite: false};
 // John's edge glow: the colours match the hare's eyes; bold, on all four edges, breathing
 const GLOW_COLOURS = {listening: "90, 230, 255", thinking: "255, 190, 106", talking: "90, 230, 255",
   followup: "90, 230, 255"};
@@ -277,6 +280,20 @@ function direct(now) {
     hare.idle = null;
     setPose(poseFor("watch"), now);
     return;
+  }
+
+  // A bigger screen is open: he steps aside to the big tree and waits
+  if (wall.bigOpen) {
+    // Walk over first if he isn't there yet
+    if (hare.spot !== "tree" && !hare.walk) {
+      walkTo("tree", now);
+    }
+
+    // Once there, he stands and waits
+    if (!hare.walk) {
+      setPose(poseFor("stand"), now);
+      return;
+    }
   }
 
   // John needs him: stop where he is and listen or think, in whatever he's wearing
