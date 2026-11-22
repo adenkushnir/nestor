@@ -373,27 +373,22 @@ function direct(now) {
   }
 }
 
-// How loud John's voice is at a moment, a wobble standing in for the real speech (as in the mockup)
-function voiceLevel(time) {
-  return Math.max(0, Math.sin(time * 9) * 0.35 + Math.sin(time * 23 + 1) * 0.25 + Math.sin(time * 3.3) * 0.3 + 0.35);
-}
-
-// The colour and strength of his LED eyes now (they show John's state)
-function eyeGlow(now) {
-  // While John talks, his eyes pulse with the voice
+// The colour and strength of his LED eyes now: they match the edge glow (violet, amber while thinking), steady
+function eyeGlow() {
+  // Talking: violet, like the edges
   if (wall.john === "talking") {
-    return {colour: "90, 230, 255", strength: 0.4 + 0.6 * voiceLevel(now / 1000)};
+    return {colour: "190, 70, 255", strength: 0.9};
   }
 
-  // Listening: bright aqua, quick pulse; thinking: amber, slow; dozing: off; otherwise a soft aqua breath
+  // Listening: bright violet; thinking: amber; dozing: off; otherwise a soft violet
   if (hare.pose.includes("listening")) {
-    return {colour: "120, 240, 255", strength: 0.8 + 0.2 * Math.sin(now / 120)};
+    return {colour: "210, 120, 255", strength: 1};
   } else if (hare.pose.includes("thinking")) {
-    return {colour: "255, 190, 106", strength: 0.55 + 0.35 * Math.sin(now / 400)};
+    return {colour: "255, 190, 106", strength: 0.9};
   } else if (hare.pose.startsWith("dozing")) {
     return null;
   }
-  return {colour: "90, 230, 255", strength: 0.35 + 0.2 * Math.sin(now / 900)};
+  return {colour: "190, 70, 255", strength: 0.45};
 }
 
 // Draw one pose of the hare onto a pen with a given opacity
@@ -415,7 +410,7 @@ function drawPose(pen, pose, alpha, now) {
   pen.translate(hare.x, hare.y);
   pen.scale(hare.facing, 1);
   pen.drawImage(image, -width / 2, -height, width, height);
-  const glow = eyeGlow(now);
+  const glow = eyeGlow();
 
   // His LED eyes glow over the picture's eyes
   for (const [eyeX, eyeY] of glow ? info.eyes : []) {
