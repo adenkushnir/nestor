@@ -269,6 +269,7 @@ class John:
             if govee.lights:
                 govee.lights.end_glow()
             wall_live.set_john("idle")
+            self.cancelled.clear()  # A stop ends only this conversation; "Hey John" works again straight away
 
     # One conversation: listen (unless the question came with "Hey John"), answer, and keep going while follow-ups come
     # within a few seconds
