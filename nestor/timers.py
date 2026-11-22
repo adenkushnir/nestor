@@ -29,16 +29,24 @@ SNOOZE_MINUTES = 9
 CHECK_SECONDS = 1
 timers_lock = threading.Lock()
 scheduler = None  # The running TimerScheduler, so John and the API can stop or snooze what's ringing
+listeners = []  # Called whenever the timers change or something starts or stops ringing (the wall's live feed)
 log = logging.getLogger(__name__)
+
+# Tell the listeners that the timers or the ringing changed
+def tell_listeners():
+    # Each listener, once
+    for listener in listeners:
+        listener()
 
 # All timers and alarms: dicts with id, kind ("timer" or "alarm"), label, and either at (one-off) or time and days
 # (a repeating alarm, days as weekday numbers with Monday = 0)
 def read_items():
     return read_json(TIMERS_PATH, [])
 
-# Save the timers and alarms
+# Save the timers and alarms, and tell the listeners
 def write_items(items):
     write_json(TIMERS_PATH, items)
+    tell_listeners()
 
 # Add an item to the saved list and return it
 def save_item(item):
@@ -187,6 +195,7 @@ class TimerScheduler:
     def ring(self, item):
         self.ringing = item
         self.stop_request = None
+        tell_listeners()
         tone, tone_seconds = ensure_sound("alarm")
         limit = ALARM_RING_SECONDS if item["kind"] == "alarm" else TIMER_RING_SECONDS
         started = time.time()
@@ -215,6 +224,7 @@ class TimerScheduler:
                 self.wait_for_stop(GAP_SECONDS)
         finally:
             self.ringing = None
+            tell_listeners()
             speaker.set_volume(volume_before)
         self.after_ringing(item)
 
@@ -232,7 +242,8 @@ class TimerScheduler:
         # Snooze, a stopped alarm at night, or nothing more
         if self.stop_request == "snooze":
             at = datetime.datetime.now() + datetime.timedelta(minutes=self.snooze_minutes)
-            save_item(dict(item, id=uuid.uuid4().hex[:6], at=at.isoformat(timespec="seconds"), time=None, days=None))
+            save_item(dict(item, id=uuid.uuid4().hex[:6], at=at.isoformat(timespec="seconds"), time=None, days=None,
+                           snoozed=True, seconds=self.snooze_minutes * 60))
             self.announcer.say(f"Snoozing for {spoken_duration(self.snooze_minutes * 60)}.", with_chime=False)
         elif self.stop_request == "stop" and item["kind"] == "alarm" and self.announcer.quiet_hours.is_quiet():
             routines.start_my_day(self.announcer, self.settings)

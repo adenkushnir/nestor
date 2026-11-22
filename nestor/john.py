@@ -16,6 +16,7 @@ from nestor import govee
 from nestor import routines
 from nestor import spotify
 from nestor import timers
+from nestor import wall_live
 from nestor.brain import Brain
 from nestor.config import PROJECT_DIR
 from nestor.microphone import FRAME_LENGTH
@@ -232,9 +233,10 @@ class John:
             timers.scheduler.paused.set()
             self.announcer.interrupt()
 
-        # The lights glow aqua while John listens and thinks
+        # The lights glow aqua while John listens and thinks (the wall shows it too)
         if govee.lights:
             govee.lights.start_glow()
+        wall_live.set_john("listening")
 
         # The ringing always resumes, the glow ends and the music comes back up, even if the conversation fails
         try:
@@ -250,12 +252,14 @@ class John:
             # The lights go back to what they showed
             if govee.lights:
                 govee.lights.end_glow()
+            wall_live.set_john("idle")
 
     # One conversation: listen (unless the question came with "Hey John"), answer, and keep going while follow-ups come
     # within a few seconds
     def conversation(self, first_words=None):
         heard = first_words
         wait_seconds = FIRST_WAIT_SECONDS
+        first_round = True
 
         # Asked in one breath: a "got it" tone and straight to the answer; otherwise the listening tone
         if heard:
@@ -266,7 +270,9 @@ class John:
 
         # Each round is one thing said and John's answer
         while True:
+            wall_live.set_john("listening" if first_round else "followup")
             heard = heard or self.listen(wait_seconds)
+            first_round = False
 
             # Nobody spoke: the conversation is over
             if heard is None:
@@ -285,7 +291,9 @@ class John:
             elif routine_for(heard) == "goodnight":
                 routines.goodnight(self.announcer, self.settings)
                 return
+            wall_live.set_john("thinking")
             answer = self.answer(heard)
+            wall_live.set_john("talking")
 
             # Speak the answer (some tools, like goodnight, speak for themselves) and wait until it's done
             if answer:
