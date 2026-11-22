@@ -777,6 +777,59 @@ function drawGlow() {
   }
 }
 
+// Switch the lite look on or off: solid glass, only the hare and the weather moving, and fewer frames
+function setLite(on) {
+  // Nothing to change
+  if (on === wall.lite) {
+    return;
+  }
+  wall.lite = on;
+  fps = on ? LITE_FPS : FULL_FPS;
+  step = 30 / fps;
+  showScene();
+}
+
+// Lite by itself: on while the chip is hot or for a while after the frames couldn't keep up, off once both are fine
+function autoLite(now) {
+  // A forced look never changes
+  if (LITE_FORCED === "1" || LITE_FORCED === "0") {
+    return;
+  }
+  setLite(hot || now < slowUntil);
+}
+
+// Hear the chip's temperature from Nestor (called by the cards with each update)
+function chipHeat(celsius) {
+  // Hot from 80 °C, cool again from 74 °C (no flicking back and forth in between)
+  if (celsius !== null && celsius >= HOT) {
+    hot = true;
+  } else if (celsius !== null && celsius <= COOL) {
+    hot = false;
+  }
+  autoLite(performance.now());
+}
+
+// Count the frames drawn; two slow stretches in a row in the full look mean the board can't keep up
+function countFrame(now) {
+  framesCounted += 1;
+
+  // Judge every 10 seconds
+  if (now - countStart < SLOW_CHECK_MS) {
+    return;
+  }
+  const rate = framesCounted * 1000 / (now - countStart);
+  slowCount = !wall.lite && countStart && rate < SLOW_FPS ? slowCount + 1 : 0;
+  framesCounted = 0;
+  countStart = now;
+
+  // Too slow twice: lite for 10 minutes
+  if (slowCount >= 2) {
+    slowUntil = now + SLOW_LITE_MS;
+    slowCount = 0;
+  }
+  autoLite(now);
+}
+
 // One frame (capped at fps a second)
 function frame(now) {
   requestAnimationFrame(frame);
