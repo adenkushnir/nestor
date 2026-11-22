@@ -27,12 +27,14 @@ from nestor.quiet import QuietHours
 from nestor.spoken import speakable
 from nestor.spoken import spoken_moment
 from nestor.trains import RailData
+from nestor.wall import Wall
 from nestor.when import parse_when
 WAIT_TIMEOUT_SECONDS = 180
 MAX_REQUEST_BYTES = 1_000_000  # Datebook's snapshot is the biggest thing sent in
 HEARTBEAT_SECONDS = 25  # The live feed sends a keep-alive this often, so idle connections aren't cut
 LOCAL_ADDRESSES = ("127.0.0.1", "::1")
 PAGES_DIR = os.path.join(os.path.dirname(__file__), "pages")  # Web pages Nestor shows, like the wall screen's
+WALL_DIR = os.path.join(PAGES_DIR, "wall")  # The wall display's page, pictures and fonts
 log = logging.getLogger(__name__)
 
 # Read the request's JSON object or form fields; returns (payload, error response or None). Bodies that aren't UTF-8
@@ -123,6 +125,9 @@ def create_app(announcer, settings):
     # Spotify sends the browser back here after signing in (Spotify only allows 127.0.0.1, not localhost)
     spotify_redirect = f"http://127.0.0.1:{int(settings.get('port', 8765))}/spotify/callback"
     connector_tools = []  # The connector's copy of John's tools, made on first use
+    secrets = load_secrets()
+    has_rail = secrets.get("NJT_USERNAME") and secrets.get("NJT_PASSWORD")
+    wall = Wall(settings, RailData(secrets["NJT_USERNAME"], secrets["NJT_PASSWORD"]) if has_rail else None)
 
     # Serve generated audio (speech and chime) to the speaker
     @app.get("/media/<path:file_name>")
@@ -346,10 +351,20 @@ def create_app(announcer, settings):
     def health():
         return jsonify(status="ok", speaker=announcer.speaker.name)
 
-    # The page on the wall screen: for now a clock that says whether Nestor is running, until the wall display is built
+    # The wall display's page on the 7-inch screen
     @app.get("/screen")
     def screen():
-        return send_from_directory(PAGES_DIR, "screen.html")
+        return send_from_directory(WALL_DIR, "index.html")
+
+    # The wall display's scripts, pictures and fonts
+    @app.get("/screen/<path:file_name>")
+    def screen_file(file_name):
+        return send_from_directory(WALL_DIR, file_name, max_age=3600)
+
+    # Everything the wall display shows right now: weather, the next event, Later today, trains, music, men's foil
+    @app.get("/wall/state")
+    def wall_state():
+        return refuse_unpaired() or jsonify(wall.state())
 
     # Pair a phone: {"code": "123456", "device": "Pixel 9"} with the code from python -m nestor --pair; answers
     # {"token": "..."}, which the phone sends with every Datebook call after that. A computer (the Claude connector)

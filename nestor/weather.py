@@ -105,12 +105,13 @@ def forecast(setting, temperature_unit="fahrenheit", days_ahead=0):
     # Today has the temperature right now; a later day only its own forecast
     if days_ahead == 0:
         now = round(answer["current"]["temperature_2m"])
-        conditions = WEATHER_WORDS.get(answer["current"]["weather_code"], "mixed")
+        code = answer["current"]["weather_code"]
     else:
         now = None
-        conditions = WEATHER_WORDS.get(daily["weather_code"][days_ahead], "mixed")
+        code = daily["weather_code"][days_ahead]
+    conditions = WEATHER_WORDS.get(code, "mixed")
     return {"place": location["name"], "unit": "F" if temperature_unit == "fahrenheit" else "C", "date": day_text,
-            "now": now, "conditions": conditions, "high": round(daily["temperature_2m_max"][days_ahead]),
+            "now": now, "conditions": conditions, "code": code, "high": round(daily["temperature_2m_max"][days_ahead]),
             "low": round(daily["temperature_2m_min"][days_ahead]),
             "rain_chance": daily["precipitation_probability_max"][days_ahead], "rain_from": rain_from,
             "sunrise": daily["sunrise"][days_ahead][11:16], "sunset": daily["sunset"][days_ahead][11:16]}

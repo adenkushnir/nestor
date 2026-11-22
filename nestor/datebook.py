@@ -21,7 +21,7 @@ ACTION_MINUTES = 10  # Actions the phone hasn't picked up by then are dropped, s
 MAX_WAIT_SECONDS = 55
 HOME_MINUTES = 5  # The phone counts as home if it called Nestor this recently (its waiting request repeats every ~50 s)
 ACTIONS = ("add", "ignore", "done", "new_plan")
-SNAPSHOT_PARTS = ("waiting", "lists", "notes", "reminders", "trip", "events")
+SNAPSHOT_PARTS = ("waiting", "lists", "notes", "reminders", "trip", "events", "fencing")
 EVENT_FIELDS = ("id", "title", "start", "end", "all_day", "place", "calendar", "from", "bring", "confirmation",
                 "track_url", "leave_by", "travel")
 # A Canvas title from Datebook: the assignment, " · ", then the course code (school:subject:course:section) and its
