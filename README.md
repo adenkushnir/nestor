@@ -384,8 +384,21 @@ The Tinker Board's 7-inch screen shows Nestor's page at `/screen`, full-screen i
   trains for your saved trip (the one that just left, then the next three), men's foil this week (LIVE while one is on)
   and what's playing on Spotify.
 
+- **Timers and alarms:** each running timer is a chip under the clock with a ring that fills up. When one rings, an
+  orange card takes the Next card's place with Stop and Snooze 9 min, and the hare taps his watch.
+- **The night clock:** in the sleeping period the wall goes black with the time and your first alarm in dim amber. A
+  touch shows the full wall for 30 seconds.
+- **John:** while you talk to him, all four edges glow and the hare's eyes match: aqua while he listens, talks and waits
+  for a follow-up, amber while he thinks.
+- **Bigger screens:** your week, the weather in words for the next 12 hours, and men's foil this week. Tap Later today,
+  the weather line or the men's foil card, or ask John ("show me my week on the wall"); they close after 30 seconds.
+- **When things go wrong:** if Nestor stops answering, the cards stay with their last information, dimmed, with
+  "Reconnecting to Nestor…". The wall goes lite by itself (solid glass, only the hare and the weather moving, 15
+  frames a second) when the board's chip passes 80 °C or the frames can't keep up, and back when things recover.
+  `?lite=1` or `?lite=0` on the page's address forces it.
+
 The pictures, the hare's poses and the Selawik font are in `nestor/pages/wall/`. The page asks `/wall/state` for its
-data every 20 seconds.
+data every 20 seconds, and follows `/wall/live` (John, what's ringing, the night clock, timers) as it changes.
 
 ## Claude Code and Claude Desktop
 
@@ -441,6 +454,7 @@ it. Everything is JSON.
 | `GET /tools`, `POST /tools/<name>` | The connector's tools, and running one (body: its input) |
 | `GET /health` | Is Nestor running, and which speaker |
 | `GET /screen` | The wall display's page (shown full-screen on the Tinker Board's 7-inch screen) |
+| `GET /wall/live` | The wall's live feed (Server-Sent Events): John's state, what's ringing, the sleeping period, the first alarm, timers and a bigger screen John opened |
 | `GET /wall/state` | Everything the wall shows: weather and sun times, the next event, Later today, list counts, trains, now playing and men's foil |
 | `POST /pair`, `DELETE /pair`, `/datebook/...` | The Datebook link (see [Datebook](#datebook)) |
 

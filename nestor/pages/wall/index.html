@@ -136,6 +136,9 @@ html, body { margin: 0; background: #000; color: var(--ink); font-family: var(--
   display: none; white-space: nowrap; }
 .walltoast.show { display: block; }
 .edgecanvas { z-index: 25; }
+#cards.offline .glass, #cards.offline .gelcard { opacity: 0.55; filter: grayscale(0.5); }
+.offbadge { display: inline-block; margin-top: 8px; padding: 4px 10px; border-radius: 999px; font-size: 13px;
+  background: rgba(60, 20, 0, 0.6); border: 1px solid rgba(255, 190, 106, 0.6); color: #ffd9a8; text-shadow: none; }
 .tapme { cursor: none; }
 .bigview { position: absolute; inset: 0; z-index: 15; display: none; background: rgba(0, 0, 0, 0.35); }
 .bigview.open { display: block; }

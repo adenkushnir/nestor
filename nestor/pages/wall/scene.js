@@ -82,10 +82,12 @@ const STARS = Array.from({length: 26}, (_, index) => [130 + (index * 137) % 330,
 // What the rest of the page tells the scene: the weather, the sun, John, a ring, the night clock, the lite look
 const wall = {weather: "partly", sunrise: 405, sunset: 1050, john: "idle", ringing: false, night: false,
   sleeping: false, bigOpen: false, lite: false};
-// John's edge glow: the colours match the hare's eyes; bold, on all four edges, breathing
-const GLOW_COLOURS = {listening: "90, 230, 255", thinking: "255, 190, 106", talking: "90, 230, 255",
-  followup: "90, 230, 255"};
+// John's edge glow: violet while he listens, talks and waits for a follow-up, amber while he thinks; bold, on all four
+// edges, steady (Aden's pick on the real screen: the aqua was hard to see)
+const GLOW_COLOURS = {listening: "190, 70, 255", thinking: "255, 190, 106", talking: "190, 70, 255",
+  followup: "190, 70, 255"};
 const GLOW_WIDTH = 28;
+let glowShown = "";  // The state and night the glow was last drawn for (steady, so only a change redraws it)
 const EDGES = [[0, 0, 800, 0], [800, 0, 800, 480], [800, 480, 0, 480], [0, 480, 0, 0]];
 const light = {name: "morning", from: "morning", to: "morning", mix: 0, late: 0};
 const hare = {x: 212, y: 300, tall: 72, facing: 1, spot: "tree", pose: "stand", fromPose: "stand", poseAt: 0,
@@ -98,8 +100,21 @@ let particlesFor = "";
 let lastFrame = 0;
 let flashAt = 0;
 let flashShown = "0";
-const FPS = Number(new URLSearchParams(location.search).get("fps")) || 30;  // frames a second (?fps= for measuring)
-const STEP = 30 / FPS;  // how far things move each frame, compared with 30 frames a second
+const FULL_FPS = Number(new URLSearchParams(location.search).get("fps")) || 30;  // frames a second (?fps= to measure)
+const LITE_FPS = 15;
+const LITE_FORCED = new URLSearchParams(location.search).get("lite");  // "1" or "0" forces lite on or off
+const HOT = 80;  // °C: the chip this hot turns lite on...
+const COOL = 74;  // ...and back off once it's down to this
+const SLOW_FPS = 20;  // Fewer frames a second than this, twice in a row, turns lite on for a while
+const SLOW_CHECK_MS = 10000;
+const SLOW_LITE_MS = 600000;  // Lite for slowness lasts 10 minutes before the full look is tried again
+let fps = FULL_FPS;
+let step = 30 / fps;  // how far things move each frame, compared with 30 frames a second
+let hot = false;
+let slowUntil = 0;
+let slowCount = 0;
+let framesCounted = 0;
+let countStart = 0;
 const drawn = {effects: true, scenefx: true, frontfx: true, edgeglow: true};  // which layers have something on them
 let soapStart = -100000;
 let shownFrom = "";
@@ -358,27 +373,22 @@ function direct(now) {
   }
 }
 
-// How loud John's voice is at a moment, a wobble standing in for the real speech (as in the mockup)
-function voiceLevel(time) {
-  return Math.max(0, Math.sin(time * 9) * 0.35 + Math.sin(time * 23 + 1) * 0.25 + Math.sin(time * 3.3) * 0.3 + 0.35);
-}
-
-// The colour and strength of his LED eyes now (they show John's state)
-function eyeGlow(now) {
-  // While John talks, his eyes pulse with the voice
+// The colour and strength of his LED eyes now: they match the edge glow (violet, amber while thinking), steady
+function eyeGlow() {
+  // Talking: violet, like the edges
   if (wall.john === "talking") {
-    return {colour: "90, 230, 255", strength: 0.4 + 0.6 * voiceLevel(now / 1000)};
+    return {colour: "190, 70, 255", strength: 0.9};
   }
 
-  // Listening: bright aqua, quick pulse; thinking: amber, slow; dozing: off; otherwise a soft aqua breath
+  // Listening: bright violet; thinking: amber; dozing: off; otherwise a soft violet
   if (hare.pose.includes("listening")) {
-    return {colour: "120, 240, 255", strength: 0.8 + 0.2 * Math.sin(now / 120)};
+    return {colour: "210, 120, 255", strength: 1};
   } else if (hare.pose.includes("thinking")) {
-    return {colour: "255, 190, 106", strength: 0.55 + 0.35 * Math.sin(now / 400)};
+    return {colour: "255, 190, 106", strength: 0.9};
   } else if (hare.pose.startsWith("dozing")) {
     return null;
   }
-  return {colour: "90, 230, 255", strength: 0.35 + 0.2 * Math.sin(now / 900)};
+  return {colour: "190, 70, 255", strength: 0.45};
 }
 
 // Draw one pose of the hare onto a pen with a given opacity
@@ -400,7 +410,7 @@ function drawPose(pen, pose, alpha, now) {
   pen.translate(hare.x, hare.y);
   pen.scale(hare.facing, 1);
   pen.drawImage(image, -width / 2, -height, width, height);
-  const glow = eyeGlow(now);
+  const glow = eyeGlow();
 
   // His LED eyes glow over the picture's eyes
   for (const [eyeX, eyeY] of glow ? info.eyes : []) {
@@ -521,8 +531,8 @@ function drawWeather(now) {
   for (const particle of particles) {
     // Rain falls at a slant, snow drifts and sways, fog slides sideways
     if (particle.kind === "drop") {
-      particle.y += particle.speed * STEP;
-      particle.x += particle.speed * 0.18 * windy * STEP;
+      particle.y += particle.speed * step;
+      particle.x += particle.speed * 0.18 * windy * step;
       pen.strokeStyle = "rgba(220, 235, 255, 0.5)";
       pen.lineWidth = 1.2;
       pen.beginPath();
@@ -530,14 +540,14 @@ function drawWeather(now) {
       pen.lineTo(particle.x + particle.size * 0.18 * windy, particle.y + particle.size);
       pen.stroke();
     } else if (particle.kind === "flake") {
-      particle.y += particle.speed * STEP;
-      particle.x += Math.sin(now / 1000 + particle.sway) * 0.5 * STEP;
+      particle.y += particle.speed * step;
+      particle.x += Math.sin(now / 1000 + particle.sway) * 0.5 * step;
       pen.fillStyle = "rgba(255, 255, 255, 0.9)";
       pen.beginPath();
       pen.arc(particle.x, particle.y, particle.size, 0, Math.PI * 2);
       pen.fill();
     } else {
-      particle.x += particle.speed * STEP;
+      particle.x += particle.speed * step;
       const bank = pen.createRadialGradient(particle.x, particle.y, 10, particle.x, particle.y, particle.size);
       bank.addColorStop(0, light.name === "night" ? "rgba(170, 180, 200, 0.26)" : "rgba(240, 244, 248, 0.34)");
       bank.addColorStop(1, "rgba(240, 244, 248, 0)");
@@ -668,7 +678,7 @@ function drawFrontFx(now) {
   }
 
   // Sometimes a new lens bubble starts below the gap
-  if (fxBubbles.length < 4 && Math.random() < 0.003 * STEP) {
+  if (fxBubbles.length < 4 && Math.random() < 0.003 * step) {
     fxBubbles.push({x: 40 + Math.random() * 400, y: 350, radius: 8 + Math.random() * 12,
       speed: 0.25 + Math.random() * 0.25, sway: Math.random() * Math.PI * 2});
   }
@@ -706,7 +716,7 @@ function drawFrontFx(now) {
 
   // Each bubble rises, sways a little and leaves at the top
   for (const bubble of [...fxBubbles]) {
-    bubble.y -= bubble.speed * STEP;
+    bubble.y -= bubble.speed * step;
     lensBubble(pen, bubble.x + Math.sin(time + bubble.sway) * 4, bubble.y, bubble.radius, 1);
 
     // Gone off the top: forget it
@@ -743,45 +753,94 @@ function glowSide(pen, side, colour, strength) {
   }
 }
 
-// John's edge glow: breathing aqua while he listens, amber while he thinks, pulsing with his voice while he talks,
-// softly on through the follow-up window; half as strong in the sleeping period
-function drawGlow(now) {
-  const time = now / 1000;
+// John's edge glow: steady violet while he listens, talks and waits for a follow-up, amber while he thinks; half as
+// strong in the sleeping period. It's drawn only when that changes.
+function drawGlow() {
+  const shown = `${wall.john}|${wall.sleeping}`;
 
-  // Nothing while John is idle
+  // Nothing while John is idle; nothing new while it's the same
   if (wall.john === "idle") {
     clearOnce("edgeglow");
+    glowShown = "";
+    return;
+  } else if (shown === glowShown) {
     return;
   }
   const pen = document.getElementById("edgeglow").getContext("2d");
-  const night = wall.sleeping ? 0.5 : 1;
-  let strength = 0.6 + 0.4 * Math.sin(time * 2.2);
   pen.clearRect(0, 0, 800, 480);
   drawn.edgeglow = true;
+  glowShown = shown;
 
-  // Talking pulses with his voice; the follow-up window stays on, softly
-  if (wall.john === "talking") {
-    strength = 0.35 + 0.65 * voiceLevel(time);
-  } else if (wall.john === "followup") {
-    strength = 0.4 + 0.15 * Math.sin(time * 1.5);
-  }
-
-  // Every edge glows at the same strength
+  // Every edge glows the same
   for (const side of EDGES) {
-    glowSide(pen, side, GLOW_COLOURS[wall.john], Math.min(1, strength) * night);
+    glowSide(pen, side, GLOW_COLOURS[wall.john] || GLOW_COLOURS.listening, wall.sleeping ? 0.5 : 1);
   }
 }
 
-// One frame (capped at FPS a second)
+// Switch the lite look on or off: solid glass, only the hare and the weather moving, and fewer frames
+function setLite(on) {
+  // Nothing to change
+  if (on === wall.lite) {
+    return;
+  }
+  wall.lite = on;
+  fps = on ? LITE_FPS : FULL_FPS;
+  step = 30 / fps;
+  showScene();
+}
+
+// Lite by itself: on while the chip is hot or for a while after the frames couldn't keep up, off once both are fine
+function autoLite(now) {
+  // A forced look never changes
+  if (LITE_FORCED === "1" || LITE_FORCED === "0") {
+    return;
+  }
+  setLite(hot || now < slowUntil);
+}
+
+// Hear the chip's temperature from Nestor (called by the cards with each update)
+function chipHeat(celsius) {
+  // Hot from 80 °C, cool again from 74 °C (no flicking back and forth in between)
+  if (celsius !== null && celsius >= HOT) {
+    hot = true;
+  } else if (celsius !== null && celsius <= COOL) {
+    hot = false;
+  }
+  autoLite(performance.now());
+}
+
+// Count the frames drawn; two slow stretches in a row in the full look mean the board can't keep up
+function countFrame(now) {
+  framesCounted += 1;
+
+  // Judge every 10 seconds
+  if (now - countStart < SLOW_CHECK_MS) {
+    return;
+  }
+  const rate = framesCounted * 1000 / (now - countStart);
+  slowCount = !wall.lite && countStart && rate < SLOW_FPS ? slowCount + 1 : 0;
+  framesCounted = 0;
+  countStart = now;
+
+  // Too slow twice: lite for 10 minutes
+  if (slowCount >= 2) {
+    slowUntil = now + SLOW_LITE_MS;
+    slowCount = 0;
+  }
+  autoLite(now);
+}
+
+// One frame (capped at fps a second)
 function frame(now) {
   requestAnimationFrame(frame);
 
   // Skip frames to stay at the frame rate
-  if (now - lastFrame < 1000 / FPS - 3) {
+  if (now - lastFrame < 1000 / fps - 3) {
     return;
   }
   lastFrame = now;
-  drawGlow(now);
+  countFrame(now);
+  drawGlow();
 
   // The night clock covers the scene: nothing else needs drawing
   if (wall.night) {
@@ -798,7 +857,8 @@ function frame(now) {
 
 // Load every pose of the hare and the pool's mask, then start the light and the frames (?lite=1 forces the lite look)
 function startScene() {
-  wall.lite = new URLSearchParams(location.search).get("lite") === "1";
+  setLite(LITE_FORCED === "1");
+
   // Every pose of the hare
   for (const pose of Object.keys(POSES.poses)) {
     images[pose] = new Image();
