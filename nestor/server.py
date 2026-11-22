@@ -15,6 +15,7 @@ from nestor import reminders
 from nestor import routines
 from nestor import spotify
 from nestor import timers
+from nestor import wall_live
 from nestor.announcer import MAX_TEXT_LENGTH
 from nestor.announcer import read_history
 from nestor.briefing import DAYS
@@ -32,6 +33,7 @@ from nestor.when import parse_when
 WAIT_TIMEOUT_SECONDS = 180
 MAX_REQUEST_BYTES = 1_000_000  # Datebook's snapshot is the biggest thing sent in
 HEARTBEAT_SECONDS = 25  # The live feed sends a keep-alive this often, so idle connections aren't cut
+LIVE_CHECK_SECONDS = 2  # The wall's live feed also looks for changes nobody announced (the sleeping period) this often
 LOCAL_ADDRESSES = ("127.0.0.1", "::1")
 PAGES_DIR = os.path.join(os.path.dirname(__file__), "pages")  # Web pages Nestor shows, like the wall screen's
 WALL_DIR = os.path.join(PAGES_DIR, "wall")  # The wall display's page, pictures and fonts
@@ -365,6 +367,37 @@ def create_app(announcer, settings):
     @app.get("/wall/state")
     def wall_state():
         return refuse_unpaired() or jsonify(wall.state())
+
+    # The wall's live feed (Server-Sent Events): John's state, what's ringing, the sleeping period, the first alarm and
+    # the timers, sent whenever they change
+    @app.get("/wall/live")
+    def wall_live_feed():
+        refused = refuse_unpaired()
+
+        # Only this machine (the wall) and paired devices may watch it
+        if refused:
+            return refused
+
+        # Send the state at once and again whenever it changes, with a keep-alive comment in quiet spells
+        def stream():
+            version = -1
+            sent = None
+            quiet_since = datetime.datetime.now()
+
+            # Runs until the page closes the connection
+            while True:
+                version = wall_live.wait(version, LIVE_CHECK_SECONDS)
+                state = wall_live.live_state(announcer)
+
+                # Something new goes out; otherwise a comment now and then keeps the connection open
+                if state != sent:
+                    sent = state
+                    quiet_since = datetime.datetime.now()
+                    yield f"event: live\ndata: {json.dumps(state)}\n\n"
+                elif (datetime.datetime.now() - quiet_since).total_seconds() >= HEARTBEAT_SECONDS:
+                    quiet_since = datetime.datetime.now()
+                    yield ": still here\n\n"
+        return Response(stream(), mimetype="text/event-stream", headers={"Cache-Control": "no-cache"})
 
     # Pair a phone: {"code": "123456", "device": "Pixel 9"} with the code from python -m nestor --pair; answers
     # {"token": "..."}, which the phone sends with every Datebook call after that. A computer (the Claude connector)

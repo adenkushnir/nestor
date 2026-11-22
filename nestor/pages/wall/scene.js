@@ -76,8 +76,14 @@ const FADE_MS = 2400;  // A new weather picture fades in over this long
 const GAP = {width: 470, height: 334};  // The open gap left of the glass, where the weather falls and things move
 const GLINTS = [[372, 300], [405, 293], [440, 288], [465, 286], [242, 321], [318, 331]];
 const STARS = Array.from({length: 26}, (_, index) => [130 + (index * 137) % 330, 12 + (index * 71) % 180, index * 0.7]);
-// What the rest of the page (and later pieces) tell the scene: the weather, the sun, John, a ring, the lite look
-const wall = {weather: "partly", sunrise: 405, sunset: 1050, john: "idle", ringing: false, lite: false};
+// What the rest of the page tells the scene: the weather, the sun, John, a ring, the night clock, the lite look
+const wall = {weather: "partly", sunrise: 405, sunset: 1050, john: "idle", ringing: false, night: false,
+  sleeping: false, lite: false};
+// John's edge glow: the colours match the hare's eyes; bold, on all four edges, breathing
+const GLOW_COLOURS = {listening: "90, 230, 255", thinking: "255, 190, 106", talking: "90, 230, 255",
+  followup: "90, 230, 255"};
+const GLOW_WIDTH = 28;
+const EDGES = [[0, 0, 800, 0], [800, 0, 800, 480], [800, 480, 0, 480], [0, 480, 0, 0]];
 const light = {name: "morning", from: "morning", to: "morning", mix: 0, late: 0};
 const hare = {x: 212, y: 300, tall: 72, facing: 1, spot: "tree", pose: "stand", fromPose: "stand", poseAt: 0,
   walk: null, idle: null, nextActAt: 4000};
@@ -91,7 +97,7 @@ let flashAt = 0;
 let flashShown = "0";
 const FPS = Number(new URLSearchParams(location.search).get("fps")) || 30;  // frames a second (?fps= for measuring)
 const STEP = 30 / FPS;  // how far things move each frame, compared with 30 frames a second
-const drawn = {effects: true, scenefx: true, frontfx: true};  // which layers have something on them
+const drawn = {effects: true, scenefx: true, frontfx: true, edgeglow: true};  // which layers have something on them
 let soapStart = -100000;
 let shownFrom = "";
 
@@ -335,9 +341,9 @@ function direct(now) {
   }
 }
 
-// How loud John's voice is at a moment (0 to 1), for pulsing with his speech
+// How loud John's voice is at a moment, a wobble standing in for the real speech (as in the mockup)
 function voiceLevel(time) {
-  return Math.max(0, Math.min(1, 0.55 + 0.3 * Math.sin(time * 9) + 0.2 * Math.sin(time * 23 + 1)));
+  return Math.max(0, Math.sin(time * 9) * 0.35 + Math.sin(time * 23 + 1) * 0.25 + Math.sin(time * 3.3) * 0.3 + 0.35);
 }
 
 // The colour and strength of his LED eyes now (they show John's state)
@@ -454,7 +460,8 @@ function clearOnce(id) {
   if (!drawn[id]) {
     return;
   }
-  document.getElementById(id).getContext("2d").clearRect(0, 0, GAP.width, GAP.height);
+  const canvas = document.getElementById(id);
+  canvas.getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
   drawn[id] = false;
 }
 
@@ -700,6 +707,54 @@ function drawFrontFx(now) {
   pen.restore();
 }
 
+// Draw one edge's glow: a soft band fading inward from the edge, at a strength
+function glowSide(pen, side, colour, strength) {
+  const [x1, y1, x2, y2] = side;
+  const horizontal = y1 === y2;
+  const inward = horizontal ? (y1 === 0 ? 1 : -1) : (x1 === 0 ? 1 : -1);
+  const band = horizontal ? pen.createLinearGradient(0, y1, 0, y1 + inward * GLOW_WIDTH) :
+    pen.createLinearGradient(x1, 0, x1 + inward * GLOW_WIDTH, 0);
+  band.addColorStop(0, `rgba(${colour}, ${0.85 * strength})`);
+  band.addColorStop(1, `rgba(${colour}, 0)`);
+  pen.fillStyle = band;
+
+  // Fill the strip along this edge
+  if (horizontal) {
+    pen.fillRect(Math.min(x1, x2), inward > 0 ? y1 : y1 - GLOW_WIDTH, Math.abs(x2 - x1), GLOW_WIDTH);
+  } else {
+    pen.fillRect(inward > 0 ? x1 : x1 - GLOW_WIDTH, Math.min(y1, y2), GLOW_WIDTH, Math.abs(y2 - y1));
+  }
+}
+
+// John's edge glow: breathing aqua while he listens, amber while he thinks, pulsing with his voice while he talks,
+// softly on through the follow-up window; half as strong in the sleeping period
+function drawGlow(now) {
+  const time = now / 1000;
+
+  // Nothing while John is idle
+  if (wall.john === "idle") {
+    clearOnce("edgeglow");
+    return;
+  }
+  const pen = document.getElementById("edgeglow").getContext("2d");
+  const night = wall.sleeping ? 0.5 : 1;
+  let strength = 0.6 + 0.4 * Math.sin(time * 2.2);
+  pen.clearRect(0, 0, 800, 480);
+  drawn.edgeglow = true;
+
+  // Talking pulses with his voice; the follow-up window stays on, softly
+  if (wall.john === "talking") {
+    strength = 0.35 + 0.65 * voiceLevel(time);
+  } else if (wall.john === "followup") {
+    strength = 0.4 + 0.15 * Math.sin(time * 1.5);
+  }
+
+  // Every edge glows at the same strength
+  for (const side of EDGES) {
+    glowSide(pen, side, GLOW_COLOURS[wall.john], Math.min(1, strength) * night);
+  }
+}
+
 // One frame (capped at FPS a second)
 function frame(now) {
   requestAnimationFrame(frame);
@@ -709,6 +764,12 @@ function frame(now) {
     return;
   }
   lastFrame = now;
+  drawGlow(now);
+
+  // The night clock covers the scene: nothing else needs drawing
+  if (wall.night) {
+    return;
+  }
   direct(now);
   const pen = document.getElementById("actor").getContext("2d");
   pen.clearRect(0, 0, GAP.width, GAP.height);

@@ -53,7 +53,9 @@ html, body { margin: 0; background: #000; color: var(--ink); font-family: var(--
 .stack { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
 .ev { display: grid; grid-template-columns: 58px 1fr; gap: 6px; padding: 4px 6px; }
 .ev .t { font-size: 13px; color: var(--label); font-variant-numeric: tabular-nums; padding-top: 1px; }
-.ev .n { font-weight: 600; font-size: 15.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ev .n { font-weight: 600; font-size: 15.5px; display: flex; align-items: center; min-width: 0; }
+.ev .n span:first-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.ev .n .chip { flex-shrink: 0; }
 .chip { font-size: 10px; font-weight: 700; border-radius: 999px; padding: 1px 6px; margin-left: 4px;
   vertical-align: 1px;
   background: rgba(255, 190, 106, 0.18); color: var(--warn); border: 1px solid rgba(255, 190, 106, 0.45); }
@@ -106,6 +108,34 @@ html, body { margin: 0; background: #000; color: var(--ink); font-family: var(--
 .freesub { font-size: 14px; opacity: 0.9; }
 .rainnote { font-size: 15px; color: #bfe6ff; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.tchip { position: relative; display: inline-flex; align-items: center; gap: 6px; font-size: 14px;
+  padding: 4px 10px 4px 7px; border-radius: 999px; background: rgba(10, 30, 52, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.25); overflow: hidden; font-variant-numeric: tabular-nums; text-shadow: none; }
+.tchip b { font-weight: 600; }
+.ringcard { padding: 14px 16px; display: grid; gap: 8px; }
+.ringcard .label { justify-self: start; }
+.rtitle { font-size: 24px; font-weight: 700; line-height: 1.1; }
+.rbtns { display: flex; gap: 10px; }
+.gel { border: 1px solid rgba(255, 255, 255, 0.5); border-radius: 999px; color: #fff; font-weight: 700;
+  font-family: inherit; cursor: none;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.42), rgba(255, 255, 255, 0.05) 50%,
+    rgba(255, 255, 255, 0) 51%), linear-gradient(180deg, #52c0f6, #178de0); }
+.ghost { border: 1px solid rgba(255, 255, 255, 0.32); border-radius: 999px; color: #9fd8ff; font-weight: 600;
+  background: rgba(var(--tint), 0.7); font-family: inherit; cursor: none; }
+.bigstop { height: 52px; font-size: 20px; padding: 0 30px; flex: 1.4; }
+.snooze { height: 52px; font-size: 16px; flex: 1; color: #fff; }
+.nightclock { position: absolute; inset: 0; background: #000; display: none; z-index: 20; }
+.nightclock.on { display: block; }
+.nclock { position: absolute; left: 0; right: 0; top: 120px; text-align: center; font-size: 150px; font-weight: 300;
+  line-height: 1; letter-spacing: -3px; }
+.nclock small { font-size: 30px; margin-left: 8px; letter-spacing: 0; }
+.nline { font-size: 26px; letter-spacing: 0; margin-top: 18px; }
+.nring { position: absolute; left: 20px; bottom: 20px; width: 440px; }
+.walltoast { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 30; padding: 8px 14px;
+  border-radius: 999px; font-size: 13px; background: rgba(8, 20, 36, 0.92); border: 1px solid var(--edge);
+  display: none; white-space: nowrap; }
+.walltoast.show { display: block; }
+.edgecanvas { z-index: 25; }
 </style>
 </head>
 <body>
@@ -119,6 +149,9 @@ html, body { margin: 0; background: #000; color: var(--ink); font-family: var(--
   <div class="layer latedim" id="lateDim"></div>
   <div class="ui" id="cards"></div>
   <div class="layer flash" id="flash"></div>
+  <div class="nightclock" id="night"></div>
+  <div class="walltoast" id="wallToast" role="status"></div>
+  <canvas class="layer edgecanvas" id="edgeglow" width="800" height="480" aria-hidden="true"></canvas>
 </div>
 <script src="screen/scene.js"></script>
 <script src="screen/cards.js"></script>
