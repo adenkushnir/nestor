@@ -370,6 +370,17 @@ def create_app(announcer, settings):
     def wall_state():
         return refuse_unpaired() or jsonify(wall.state())
 
+    # Stop John mid-conversation (a tap anywhere on the wall while he listens, thinks or talks); answers {"stopped"}
+    @app.post("/john/stop")
+    def stop_john():
+        from nestor import john  # Imported here only: John's libraries load slowly, and only the full service has him
+        refused = refuse_unpaired()
+
+        # Only this machine (the wall) and paired devices may stop him
+        if refused:
+            return refused
+        return jsonify(stopped=bool(john.current and john.current.cancel()))
+
     # The wall's live feed (Server-Sent Events): John's state, what's ringing, the sleeping period, the first alarm and
     # the timers, sent whenever they change
     @app.get("/wall/live")

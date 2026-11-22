@@ -58,6 +58,7 @@ MAX_REQUEST_WORDS = 15  # Longer phrases ending in ", John" are probably talk, n
 MAX_PLAIN_REQUEST_WORDS = 6  # Without a comma, only short phrases ending in John count, to limit waking by mistake
 MORNING = re.compile(r"^((good|the) )?morning|start (my|the) (day|morning)|i'?m up$")
 NIGHT = re.compile(r"^(good ?night|night|going to bed)$")
+current = None  # The running John, so a tap on the wall can stop him
 log = logging.getLogger(__name__)
 
 # What was said without the wake phrase, which sometimes ends up in the recording ("What time is it? Hey John")
@@ -131,8 +132,22 @@ class John:
         self.settings = settings
         self.secrets = secrets
         self.follow_up_seconds = float(settings.get("john_follow_up_seconds", 5))
+        self.cancelled = threading.Event()  # Set when he's told to stop mid-conversation (a tap on the wall)
+        global current
+        current = self
         self.speech_chance = float(settings.get("john_speech_threshold", 0.4))
         threading.Thread(target=self.run, name="hey-john", daemon=True).start()
+
+    # Stop the conversation now: the speaker stops, and he stops listening or drops the answer he's working on;
+    # returns True if he was in a conversation
+    def cancel(self):
+        # Only a conversation can be stopped
+        if wall_live.john_state == "idle":
+            return False
+        self.cancelled.set()
+        self.announcer.interrupt()
+        log.info("John was stopped from the wall")
+        return True
 
     # Set up the wake word, speech detector, microphone, speech-to-text and brain, then wait for "Hey John" forever
     def run(self):
@@ -237,6 +252,7 @@ class John:
         if govee.lights:
             govee.lights.start_glow()
         wall_live.set_john("listening")
+        self.cancelled.clear()
 
         # The ringing always resumes, the glow ends and the music comes back up, even if the conversation fails
         try:
@@ -274,8 +290,8 @@ class John:
             heard = heard or self.listen(wait_seconds)
             first_round = False
 
-            # Nobody spoke: the conversation is over
-            if heard is None:
+            # Nobody spoke, or he was told to stop: the conversation is over
+            if heard is None or self.cancelled.is_set():
                 return
             words = heard.lower().strip(" .!?,")
             ringing = timers.scheduler and timers.scheduler.ringing
@@ -293,12 +309,20 @@ class John:
                 return
             wall_live.set_john("thinking")
             answer = self.answer(heard)
+
+            # Stopped while thinking: the answer isn't said
+            if self.cancelled.is_set():
+                return
             wall_live.set_john("talking")
 
             # Speak the answer (some tools, like goodnight, speak for themselves) and wait until it's done
             if answer:
                 self.announcer.say(answer, with_chime=False).wait(ANSWER_TIMEOUT_SECONDS)
             self.wait_for_quiet_speaker()
+
+            # Stopped while talking: no follow-up
+            if self.cancelled.is_set():
+                return
             self.recorder.start()
             wait_seconds = LOOKING_SECONDS if self.brain.tools.showed_look else self.follow_up_seconds
             self.brain.tools.showed_look = False
@@ -382,8 +406,8 @@ class John:
         best_chance = 0.0
         started = time.time()
 
-        # Read frames until speech has been followed by a pause, or the time runs out
-        while time.time() - started < max_seconds:
+        # Read frames until speech has been followed by a pause, the time runs out, or he's told to stop
+        while time.time() - started < max_seconds and not self.cancelled.is_set():
             # Nestor talking on the speaker isn't the user: wait until it's done, then listen afresh (John's own
             # tones don't count, so words right after the listening tone are kept)
             if self.announcer.speaking:

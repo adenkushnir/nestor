@@ -82,10 +82,12 @@ const STARS = Array.from({length: 26}, (_, index) => [130 + (index * 137) % 330,
 // What the rest of the page tells the scene: the weather, the sun, John, a ring, the night clock, the lite look
 const wall = {weather: "partly", sunrise: 405, sunset: 1050, john: "idle", ringing: false, night: false,
   sleeping: false, bigOpen: false, lite: false};
-// John's edge glow: the colours match the hare's eyes; bold, on all four edges, breathing
-const GLOW_COLOURS = {listening: "90, 230, 255", thinking: "255, 190, 106", talking: "90, 230, 255",
-  followup: "90, 230, 255"};
+// John's edge glow: violet while he listens, talks and waits for a follow-up, amber while he thinks; bold, on all four
+// edges, steady (Aden's pick on the real screen: the aqua was hard to see)
+const GLOW_COLOURS = {listening: "190, 70, 255", thinking: "255, 190, 106", talking: "190, 70, 255",
+  followup: "190, 70, 255"};
 const GLOW_WIDTH = 28;
+let glowShown = "";  // The state and night the glow was last drawn for (steady, so only a change redraws it)
 const EDGES = [[0, 0, 800, 0], [800, 0, 800, 480], [800, 480, 0, 480], [0, 480, 0, 0]];
 const light = {name: "morning", from: "morning", to: "morning", mix: 0, late: 0};
 const hare = {x: 212, y: 300, tall: 72, facing: 1, spot: "tree", pose: "stand", fromPose: "stand", poseAt: 0,
@@ -756,86 +758,28 @@ function glowSide(pen, side, colour, strength) {
   }
 }
 
-// John's edge glow: breathing aqua while he listens, amber while he thinks, pulsing with his voice while he talks,
-// softly on through the follow-up window; half as strong in the sleeping period
-function drawGlow(now) {
-  const time = now / 1000;
+// John's edge glow: steady violet while he listens, talks and waits for a follow-up, amber while he thinks; half as
+// strong in the sleeping period. It's drawn only when that changes.
+function drawGlow() {
+  const shown = `${wall.john}|${wall.sleeping}`;
 
-  // Nothing while John is idle
+  // Nothing while John is idle; nothing new while it's the same
   if (wall.john === "idle") {
     clearOnce("edgeglow");
+    glowShown = "";
+    return;
+  } else if (shown === glowShown) {
     return;
   }
   const pen = document.getElementById("edgeglow").getContext("2d");
-  const night = wall.sleeping ? 0.5 : 1;
-  let strength = 0.6 + 0.4 * Math.sin(time * 2.2);
   pen.clearRect(0, 0, 800, 480);
   drawn.edgeglow = true;
+  glowShown = shown;
 
-  // Talking pulses with his voice; the follow-up window stays on, softly
-  if (wall.john === "talking") {
-    strength = 0.35 + 0.65 * voiceLevel(time);
-  } else if (wall.john === "followup") {
-    strength = 0.4 + 0.15 * Math.sin(time * 1.5);
-  }
-
-  // Every edge glows at the same strength
+  // Every edge glows the same
   for (const side of EDGES) {
-    glowSide(pen, side, GLOW_COLOURS[wall.john], Math.min(1, strength) * night);
+    glowSide(pen, side, GLOW_COLOURS[wall.john] || GLOW_COLOURS.listening, wall.sleeping ? 0.5 : 1);
   }
-}
-
-// Switch the lite look on or off: solid glass, only the hare and the weather moving, and fewer frames
-function setLite(on) {
-  // Nothing to change
-  if (on === wall.lite) {
-    return;
-  }
-  wall.lite = on;
-  fps = on ? LITE_FPS : FULL_FPS;
-  step = 30 / fps;
-  showScene();
-}
-
-// Lite by itself: on while the chip is hot or for a while after the frames couldn't keep up, off once both are fine
-function autoLite(now) {
-  // A forced look never changes
-  if (LITE_FORCED === "1" || LITE_FORCED === "0") {
-    return;
-  }
-  setLite(hot || now < slowUntil);
-}
-
-// Hear the chip's temperature from Nestor (called by the cards with each update)
-function chipHeat(celsius) {
-  // Hot from 80 °C, cool again from 74 °C (no flicking back and forth in between)
-  if (celsius !== null && celsius >= HOT) {
-    hot = true;
-  } else if (celsius !== null && celsius <= COOL) {
-    hot = false;
-  }
-  autoLite(performance.now());
-}
-
-// Count the frames drawn; two slow stretches in a row in the full look mean the board can't keep up
-function countFrame(now) {
-  framesCounted += 1;
-
-  // Judge every 10 seconds
-  if (now - countStart < SLOW_CHECK_MS) {
-    return;
-  }
-  const rate = framesCounted * 1000 / (now - countStart);
-  slowCount = !wall.lite && countStart && rate < SLOW_FPS ? slowCount + 1 : 0;
-  framesCounted = 0;
-  countStart = now;
-
-  // Too slow twice: lite for 10 minutes
-  if (slowCount >= 2) {
-    slowUntil = now + SLOW_LITE_MS;
-    slowCount = 0;
-  }
-  autoLite(now);
 }
 
 // One frame (capped at fps a second)
@@ -848,7 +792,7 @@ function frame(now) {
   }
   lastFrame = now;
   countFrame(now);
-  drawGlow(now);
+  drawGlow();
 
   // The night clock covers the scene: nothing else needs drawing
   if (wall.night) {
@@ -866,6 +810,7 @@ function frame(now) {
 // Load every pose of the hare and the pool's mask, then start the light and the frames (?lite=1 forces the lite look)
 function startScene() {
   setLite(LITE_FORCED === "1");
+
   // Every pose of the hare
   for (const pose of Object.keys(POSES.poses)) {
     images[pose] = new Image();

@@ -420,15 +420,29 @@ function drawBig() {
   document.getElementById("bigCountdown").textContent = `Closes in ${left} s`;
 }
 
-// Taps on the wall: Stop and Snooze, the bigger screens' cards and Close, and a touch on the night clock shows the full
-// wall for 30 seconds
+// Stop John wherever he is in a conversation (a tap anywhere while he listens, thinks or talks)
+async function stopJohn() {
+  // A failed call says so rather than nothing
+  try {
+    const reply = await fetch("/john/stop", {method: "POST", signal: AbortSignal.timeout(10000)});
+    showToast(reply.ok ? "Stopped John" : "Nestor didn't answer; try again");
+  } catch (error) {
+    showToast("Nestor didn't answer; try again");
+  }
+}
+
+// Taps on the wall: any tap stops John while he's busy; otherwise Stop and Snooze, the bigger screens' cards and Close,
+// and a touch on the night clock shows the full wall for 30 seconds
 function onTap(event) {
   const button = event.target.closest("[data-ring]");
   const close = event.target.closest("[data-big]");
   const open = event.target.closest("[data-open]");
 
-  // A ring button, Close, a card that opens its screen, or the night clock
-  if (button) {
+  // While John is busy any tap stops him; otherwise a ring button, Close, a card that opens its screen, or the night
+  // clock
+  if (wall.john !== "idle") {
+    stopJohn();
+  } else if (button) {
     ringButton(button.dataset.ring);
   } else if (close) {
     closeBig();
