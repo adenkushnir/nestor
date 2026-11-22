@@ -211,7 +211,7 @@ function renderCards() {
     (data.music ? musicCard() : "");
   document.getElementById("cards").classList.toggle("offline", offline);
   document.getElementById("cards").innerHTML = '<div style="position:absolute;inset:10px;display:grid;' +
-    'grid-template-columns:1.4fr 1fr;gap:10px">' +
+    'grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:10px">' +
     `<div class="stack" style="justify-content:space-between;padding:6px 6px 0">${clock}` +
     `${live.ringing ? ringCard() : data.next ? nextCard(data.next) : freeCard()}</div>` +
     `<div class="stack">${rail}</div></div>`;
