@@ -19,7 +19,9 @@ PC on the same Wi-Fi.
 - **Datebook** (the [Datebook](https://github.com/adenkushnir/text-to-calendar) phone app): its leave-by alerts,
   travel changes and reminders spoken at home, and its plans, lists and reminders in the briefing.
 - **The Tinker Board:** Nestor can run 24/7 on an ASUS Tinker Board with a 7" screen and a USB microphone (see
-  [board/README.md](board/README.md)). Later, that screen shows your day in Datebook's look.
+  [board/README.md](board/README.md)).
+- **The wall display** on that screen: your day in Datebook's look, over a rooftop garden that follows the time of
+  day and the weather, with a hare in a grey suit (John's face) walking it.
 
 ## How it works
 
@@ -365,6 +367,26 @@ what's playing ("Levitating by Dua Lipa"), and never says the device.
 The sign-in is kept in `data/spotify_token.json` and the last device used in `data/spotify_device.json`. Turn Spotify
 off with `spotify: false` in `config.yaml`.
 
+## The wall display
+
+The Tinker Board's 7-inch screen shows Nestor's page at `/screen`, full-screen in a kiosk. It has:
+
+- **The scene:** a glossy 3D rooftop garden in six lights (night, blue hour, morning, midday, golden hour, sunset),
+  worked out from today's sunrise and sunset exactly as Datebook does, and a picture for every weather. Late at night
+  it dims by up to 30%. Rain, snow and fog fall in the open gap left of the cards; the pool shimmers, stars twinkle on
+  clear nights, there's a lens flare at golden hour and a glass bubble now and then.
+- **The hare** (John's face): walks between the big tree, the pool's rim and the pergola every 20-40 seconds on dry
+  days, dressed for the weather (sunglasses, umbrella, overcoat, trench coat), and dozes at night.
+- **The clock and weather:** the time, the date, the temperature and words, and "Rain from 4 PM" when rain is coming.
+- **The Next card:** the next event today with its start time, countdown, place, when to leave and what to bring, and
+  its train's live status; orange when it's time to go; "Nothing else today" when nothing's left.
+- **The rail:** Later today (with your list counts, or "Updated 3 h ago" when the phone's been away a while), the
+  trains for your saved trip (the one that just left, then the next three), men's foil this week (LIVE while one is on)
+  and what's playing on Spotify.
+
+The pictures, the hare's poses and the Selawik font are in `nestor/pages/wall/`. The page asks `/wall/state` for its
+data every 20 seconds.
+
 ## Claude Code and Claude Desktop
 
 Claude Code and the Claude Desktop app on this PC can use Nestor's tools through `nestor_connector.py`, a small MCP
@@ -418,6 +440,8 @@ it. Everything is JSON.
 | `GET /spotify/login` | Sign Nestor in to Spotify (open it in a browser on the PC) |
 | `GET /tools`, `POST /tools/<name>` | The connector's tools, and running one (body: its input) |
 | `GET /health` | Is Nestor running, and which speaker |
+| `GET /screen` | The wall display's page (shown full-screen on the Tinker Board's 7-inch screen) |
+| `GET /wall/state` | Everything the wall shows: weather and sun times, the next event, Later today, list counts, trains, now playing and men's foil |
 | `POST /pair`, `DELETE /pair`, `/datebook/...` | The Datebook link (see [Datebook](#datebook)) |
 
 An alert is spoken straight away, or held during quiet hours and played when they end. Two optional fields change that:
@@ -478,9 +502,16 @@ Datebook calls send `Authorization: Bearer <token>`.
   "events": [{"id": "88-1795107600", "title": "Soccer", "start": "2026-11-18T09:00", "end": "2026-11-18T10:30",
               "all_day": false, "place": "Field 3, Buccleuch Park", "calendar": "Personal", "from": "Coach Dan",
               "bring": "cleats, $20", "confirmation": "", "track_url": "", "leave_by": "2026-11-18T08:35",
-              "travel": "20 min drive"}]
+              "travel": "20 min drive", "train": {"departs": "08:12", "from": "New Brunswick", "to": "New York Penn"}}],
+  "fencing": [{"name": "Junior Men's Foil", "where": "November NAC · Columbus", "start": "2026-11-21T08:00",
+               "end": "2026-11-22", "live": false, "stage": "", "live_from": "2026-11-21T08:00",
+               "live_until": "2026-11-21T16:00"}]
 }
 ```
+
+An event's `train` is the NJ Transit train Datebook picked for its leave-by (the wall shows its live status on the Next
+card). `fencing` is this week's men's foil schedule, each event on the day it shows (today while it's on), with today's
+stage and when its stream is on (the wall marks it LIVE then).
 
 `events` are your calendar events from today to 14 days ahead, from the phone's calendars Datebook uses. This is
 how Nestor knows your calendar, with no Google login of its own. All-day events have just a date (`"start":

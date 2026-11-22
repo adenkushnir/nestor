@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<!-- Nestor's wall display on the 7-inch screen: the rooftop scene with the hare, the clock and weather, the next event,
+     Later today, trains, men's foil and now playing (as designed and approved in the final mockup) -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Nestor</title>
+<style>
+@font-face { font-family: "Selawik"; src: url("screen/fonts/selawik_light.ttf"); font-weight: 300; }
+@font-face { font-family: "Selawik"; src: url("screen/fonts/selawik_regular.ttf"); font-weight: 400; }
+@font-face { font-family: "Selawik"; src: url("screen/fonts/selawik_semibold.ttf"); font-weight: 600; }
+@font-face { font-family: "Selawik"; src: url("screen/fonts/selawik_bold.ttf"); font-weight: 700; }
+:root {
+  --ink: #eef5ff;
+  --muted: #b4c6e0;
+  --label: #d6e8ff;
+  --warn: #ffbe6a;
+  --edge: rgba(255, 255, 255, 0.22);
+  --tint: 16, 44, 72;
+  --font: "Selawik", "Segoe UI", system-ui, sans-serif;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: #000; color: var(--ink); font-family: var(--font); overflow: hidden; cursor: none; }
+.screen { width: 800px; height: 480px; position: relative; overflow: hidden; color: var(--ink); font-size: 13.5px;
+  line-height: 1.3; user-select: none; text-align: left; }
+.scene { position: absolute; inset: 0; background-repeat: no-repeat; background-size: 800px auto;
+  background-position: 0 -28px; }
+.veil { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.12); }
+.ui { position: absolute; inset: 0; }
+.layer { position: absolute; inset: 0; pointer-events: none; }
+/* Everything that moves stays in the open gap left of the glass, so the glass's blur never has to be redone */
+.gap { position: absolute; left: 0; top: 0; width: 470px; height: 334px; pointer-events: none; }
+.flash { background: #fff; opacity: 0; }
+.latedim { background: #000; opacity: 0; transition: opacity 1.2s; }
+.glass { position: relative; border-radius: 14px; border: 1px solid var(--edge); overflow: hidden;
+  background-color: rgba(var(--tint), 0.66); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16), 0 6px 18px rgba(0, 0, 0, 0.18); }
+.glass::before { content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.10), rgba(255, 255, 255, 0) 42%); }
+.glass > * { position: relative; }
+.lite .glass { backdrop-filter: none; -webkit-backdrop-filter: none; background-color: rgba(var(--tint), 0.9); }
+.pad { padding: 9px 11px; }
+.label { display: inline-block; font-size: 11px; letter-spacing: 0.9px; font-weight: 700; text-transform: uppercase;
+  color: var(--label); background: rgba(10, 30, 52, 0.55); border-radius: 999px; padding: 2px 9px; max-width: 100%;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
+.muted { color: var(--muted); }
+.small { font-size: 12px; line-height: 1.3; }
+.warn { color: var(--warn); }
+.shadow { text-shadow: 0 1px 6px rgba(0, 0, 0, 0.6), 0 0 18px rgba(0, 0, 0, 0.25); }
+.row { display: flex; align-items: center; gap: 8px; }
+.grow { flex: 1; min-width: 0; }
+.stack { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+.ev { display: grid; grid-template-columns: 58px 1fr; gap: 6px; padding: 4px 6px; }
+.ev .t { font-size: 13px; color: var(--label); font-variant-numeric: tabular-nums; padding-top: 1px; }
+.ev .n { font-weight: 600; font-size: 15.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chip { font-size: 10px; font-weight: 700; border-radius: 999px; padding: 1px 6px; margin-left: 4px;
+  vertical-align: 1px;
+  background: rgba(255, 190, 106, 0.18); color: var(--warn); border: 1px solid rgba(255, 190, 106, 0.45); }
+.train { display: grid; grid-template-columns: 54px 54px 1fr; gap: 4px; font-size: 15px; padding: 2px 0;
+  font-variant-numeric: tabular-nums; }
+.train .tt { font-weight: 600; }
+.train.gone { opacity: 0.42; }
+.train.cancelled .tt { text-decoration: line-through; opacity: 0.8; }
+.bad { color: #ff8a8a; font-weight: 600; }
+.notrains { font-size: 14px; margin-top: 4px; line-height: 1.4; }
+.art { width: 44px; height: 44px; border-radius: 8px; flex-shrink: 0; border: 1px solid rgba(255, 255, 255, 0.3);
+  background: linear-gradient(135deg, #5adbea, #0e6fa8 60%, #283c8c) center / cover no-repeat; }
+.bar { height: 4px; border-radius: 2px; background: rgba(255, 255, 255, 0.18); overflow: hidden; }
+.bar i { display: block; height: 100%; width: 0; border-radius: 2px;
+  background: linear-gradient(90deg, #5adbea, #52c0f6); }
+.gelcard { border-radius: 14px; border: 1px solid rgba(255, 255, 255, 0.5); color: #fff;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.28), rgba(255, 255, 255, 0) 45%), linear-gradient(135deg,
+  #2fa7ea, #0e86c4 55%, #0a98b0);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.28); }
+.gelcard.urgent { background: linear-gradient(180deg, rgba(255, 255, 255, 0.28), rgba(255, 255, 255, 0) 45%),
+  linear-gradient(135deg, #ffb347, #ff8a1a 60%, #e86a00); }
+.ntitle { font-size: 24px; font-weight: 700; line-height: 1.15; }
+.nleave { font-size: 14px; font-weight: 600; color: #fff3c4; }
+.gelcard.urgent .nleave { color: #fff; font-size: 16px; }
+.nstatus { display: flex; align-items: center; gap: 6px; font-size: 13px; margin-top: 4px; padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(0, 40, 80, 0.3); width: fit-content; }
+.nstatus.late { background: rgba(120, 40, 0, 0.45); color: #ffe0b8; }
+.nextsplit { display: grid; grid-template-columns: 92px 1fr; gap: 12px; padding: 12px 14px; font-size: 15.5px; }
+.nbig { display: grid; align-content: center; justify-items: center;
+  border-right: 1px solid rgba(255, 255, 255, 0.35); padding-right: 10px; }
+.ntime { font-size: 34px; font-weight: 300; line-height: 1; }
+.ntime small { font-size: 13px; margin-left: 2px; }
+.nsoon { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.2px; white-space: nowrap;
+  margin-top: 4px; text-align: center; }
+.ndetail { min-width: 0; }
+.ndetail > div { overflow: hidden; text-overflow: ellipsis; }
+.frow { display: flex; gap: 8px; align-items: baseline; font-size: 14px; padding: 2px 0; }
+.fday { width: 34px; flex-shrink: 0; color: var(--label); font-size: 11.5px; font-weight: 700; }
+.fday.live { color: #fff; background: #ff5a6e; border-radius: 999px; text-align: center; font-size: 10px;
+  padding: 1px 0; }
+.fname { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hcount { margin-left: auto; font-size: 11px; color: var(--muted); white-space: nowrap; }
+.stalehead { color: var(--warn); }
+.tight .ev { padding: 2px 6px; }
+.freecard { padding: 14px 16px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0) 45%),
+  linear-gradient(135deg, #5fc7e8, #3aa6c9 60%, #2b8fb0); }
+.freetitle { font-size: 22px; font-weight: 700; }
+.freesub { font-size: 14px; opacity: 0.9; }
+.rainnote { font-size: 15px; color: #bfe6ff; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+</style>
+</head>
+<body>
+<div class="screen" id="screen">
+  <div class="scene" id="scene"></div><div class="scene" id="sceneTop" style="opacity:0"></div>
+  <div class="scene" id="sceneFade" style="opacity:0"></div><div class="veil"></div>
+  <canvas class="gap" id="scenefx" width="470" height="334" aria-hidden="true"></canvas>
+  <canvas class="gap" id="actor" width="470" height="334" aria-hidden="true"></canvas>
+  <canvas class="gap" id="effects" width="470" height="334" aria-hidden="true"></canvas>
+  <canvas class="gap" id="frontfx" width="470" height="334" aria-hidden="true"></canvas>
+  <div class="layer latedim" id="lateDim"></div>
+  <div class="ui" id="cards"></div>
+  <div class="layer flash" id="flash"></div>
+</div>
+<script src="screen/scene.js"></script>
+<script src="screen/cards.js"></script>
+</body>
+</html>
