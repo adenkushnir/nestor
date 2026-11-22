@@ -1,14 +1,17 @@
 # The wall display's live feed: what has to show at once rather than at the next 20-second update. John's state (idle,
 # listening, thinking, talking, follow-up) for the edge glow and the hare's eyes, what's ringing (with its Stop and
-# Snooze card), the sleeping period (the night clock) with the first alarm, and the timers counting down.
+# Snooze card), the sleeping period (the night clock) with the first alarm, the timers counting down, and a bigger
+# screen John was asked to open.
 import datetime
 import threading
 from nestor import timers
 JOHN_STATES = ("idle", "listening", "thinking", "talking", "followup")
+WALL_VIEWS = ("week", "weather", "fencing", "close")
 ALARM_AHEAD_HOURS = 24  # The night clock shows the first alarm within this many hours
 changed = threading.Condition()
 version = 0
 john_state = "idle"
+big_request = None  # The last bigger screen asked for: {"view": "week", "id": 3} (the id tells a new ask from an old)
 
 # Tell everyone watching the feed that something changed
 def poke():
@@ -27,6 +30,17 @@ def set_john(state):
     if state in JOHN_STATES and state != john_state:
         john_state = state
         poke()
+
+# Open a bigger screen on the wall ("week", "weather" or "fencing"), or close it ("close"); returns what was asked
+def show(view):
+    global big_request
+
+    # Only the wall's screens
+    if view not in WALL_VIEWS:
+        raise ValueError(f"the wall has no {view!r} screen; use one of {', '.join(WALL_VIEWS)}")
+    big_request = {"view": view, "id": (big_request or {}).get("id", 0) + 1}
+    poke()
+    return big_request
 
 # Wait until something changes (up to timeout seconds); returns the version now
 def wait(seen, timeout):
@@ -78,6 +92,7 @@ def live_state(announcer, now=None):
             first_alarm = f"{rings.hour % 12 or 12}:{rings.minute:02d} {'AM' if rings.hour < 12 else 'PM'}"
     ringing = data["ringing"]
     return {"john": john_state, "ringing": ring_card(ringing, now) if ringing else None,
-            "sleeping": bool(announcer.quiet_hours.is_quiet()), "alarm": first_alarm, "timers": chips}
+            "sleeping": bool(announcer.quiet_hours.is_quiet()), "alarm": first_alarm, "timers": chips,
+            "big": big_request}
 # The feed hears about every change to the timers and the ringing
 timers.listeners.append(poke)

@@ -12,6 +12,7 @@ from nestor import routines
 from nestor import spotify
 from nestor import timers
 from nestor import trains
+from nestor import wall_live
 from nestor.announcer import read_history
 from nestor.briefing import build_briefing
 from nestor.spoken import spoken_clock
@@ -135,6 +136,11 @@ def tool_definitions():
                                                           "was last played"}}),
         tool("music_control", "Pause, resume, skip to the next or previous song on Spotify, or check what's playing.",
              {"action": {"type": "string", "enum": ["pause", "resume", "next", "previous", "now_playing"]}}),
+        tool("show_on_wall", "Open a bigger screen on the wall display (the 7-inch screen at home): the user's week "
+             "(today in full and the next 6 days), the weather (the next 12 hours in words), or men's foil this week; "
+             "close closes it. It closes by itself after 30 seconds. Use it when asked to show something on the wall "
+             "or screen.",
+             {"view": {"type": "string", "enum": list(wall_live.WALL_VIEWS)}}),
         tool("remember", "Remember a lasting fact about the user when asked, or what lighting they liked for an "
              "activity (e.g. 'likes dim warm drifting light for comedies').", {"fact": TEXT}),
         tool("forget", "Forget remembered facts containing these words, when asked.", {"about": TEXT}),
@@ -251,6 +257,8 @@ class JohnTools:
             return self.lights(name, arguments)
         elif name in ("play_music", "music_control"):
             return self.music(name, arguments)
+        elif name == "show_on_wall":
+            return json.dumps({"shown": wall_live.show(arguments["view"])})
         elif name == "speak":
             return json.dumps({"status": self.announcer.alert(arguments["text"], "claude")})
         elif name == "home_status":

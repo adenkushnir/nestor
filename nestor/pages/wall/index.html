@@ -136,6 +136,38 @@ html, body { margin: 0; background: #000; color: var(--ink); font-family: var(--
   display: none; white-space: nowrap; }
 .walltoast.show { display: block; }
 .edgecanvas { z-index: 25; }
+.tapme { cursor: none; }
+.bigview { position: absolute; inset: 0; z-index: 15; display: none; background: rgba(0, 0, 0, 0.35); }
+.bigview.open { display: block; }
+.bigcard { position: absolute; left: 10px; right: 10px; top: 10px; bottom: 10px; display: flex; flex-direction: column;
+  padding: 12px 14px; backdrop-filter: none; -webkit-backdrop-filter: none; background-color: rgba(var(--tint), 0.9); }
+.bighead { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.bigtitle { font-size: 20px; font-weight: 700; }
+.bigclose { font-size: 12px; color: var(--muted); }
+.bighead .ghost { height: 34px; padding: 0 16px; font-size: 14px; }
+.bigbody { flex: 1; min-height: 0; overflow: hidden; }
+.bcols { display: grid; grid-template-columns: 1.15fr 1fr; gap: 14px; }
+.bev { display: grid; grid-template-columns: 70px 1fr; gap: 6px; padding: 3px 0; font-size: 15px; line-height: 1.3; }
+.bev.past { opacity: 0.45; }
+.bt { color: var(--label); font-size: 13px; padding-top: 1px; }
+.bleave { color: var(--warn); font-size: 13px; }
+.bday { display: grid; grid-template-columns: 84px 1fr; gap: 6px; padding: 4px 0; border-bottom: 1px solid
+  rgba(255, 255, 255, 0.1); font-size: 15px; line-height: 1.35; }
+.bdname { color: var(--label); font-weight: 600; font-size: 13px; }
+.fbday { margin-bottom: 10px; }
+.fbev { display: flex; gap: 10px; align-items: flex-start; padding: 5px 0; font-size: 17px; }
+.fbtime { width: 72px; flex-shrink: 0; color: var(--label); font-size: 14px; padding-top: 2px; }
+.sbanner { font-size: 40px; font-weight: 300; margin-top: 6px; }
+.ssub { font-size: 16px; color: var(--muted); margin: 4px 0 18px; }
+.sparts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.spart { display: grid; gap: 6px; padding: 14px; border-radius: 14px; border: 1px solid rgba(255, 255, 255, 0.2);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.02)); }
+.sname { font-size: 20px; font-weight: 700; }
+.sspan { font-size: 13px; color: var(--muted); }
+.stemps { font-size: 24px; font-weight: 300; }
+.swords { font-size: 15px; }
+.lbar { height: 8px; border-radius: 4px; background: rgba(255, 255, 255, 0.1); overflow: hidden; }
+.lbar i { display: block; height: 100%; background: linear-gradient(90deg, #7fd0ff, #178de0); border-radius: 4px; }
 </style>
 </head>
 <body>
@@ -149,6 +181,7 @@ html, body { margin: 0; background: #000; color: var(--ink); font-family: var(--
   <div class="layer latedim" id="lateDim"></div>
   <div class="ui" id="cards"></div>
   <div class="layer flash" id="flash"></div>
+  <div class="bigview" id="big"></div>
   <div class="nightclock" id="night"></div>
   <div class="walltoast" id="wallToast" role="status"></div>
   <canvas class="layer edgecanvas" id="edgeglow" width="800" height="480" aria-hidden="true"></canvas>
