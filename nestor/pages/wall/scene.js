@@ -98,8 +98,21 @@ let particlesFor = "";
 let lastFrame = 0;
 let flashAt = 0;
 let flashShown = "0";
-const FPS = Number(new URLSearchParams(location.search).get("fps")) || 30;  // frames a second (?fps= for measuring)
-const STEP = 30 / FPS;  // how far things move each frame, compared with 30 frames a second
+const FULL_FPS = Number(new URLSearchParams(location.search).get("fps")) || 30;  // frames a second (?fps= to measure)
+const LITE_FPS = 15;
+const LITE_FORCED = new URLSearchParams(location.search).get("lite");  // "1" or "0" forces lite on or off
+const HOT = 80;  // °C: the chip this hot turns lite on...
+const COOL = 74;  // ...and back off once it's down to this
+const SLOW_FPS = 20;  // Fewer frames a second than this, twice in a row, turns lite on for a while
+const SLOW_CHECK_MS = 10000;
+const SLOW_LITE_MS = 600000;  // Lite for slowness lasts 10 minutes before the full look is tried again
+let fps = FULL_FPS;
+let step = 30 / fps;  // how far things move each frame, compared with 30 frames a second
+let hot = false;
+let slowUntil = 0;
+let slowCount = 0;
+let framesCounted = 0;
+let countStart = 0;
 const drawn = {effects: true, scenefx: true, frontfx: true, edgeglow: true};  // which layers have something on them
 let soapStart = -100000;
 let shownFrom = "";
@@ -521,8 +534,8 @@ function drawWeather(now) {
   for (const particle of particles) {
     // Rain falls at a slant, snow drifts and sways, fog slides sideways
     if (particle.kind === "drop") {
-      particle.y += particle.speed * STEP;
-      particle.x += particle.speed * 0.18 * windy * STEP;
+      particle.y += particle.speed * step;
+      particle.x += particle.speed * 0.18 * windy * step;
       pen.strokeStyle = "rgba(220, 235, 255, 0.5)";
       pen.lineWidth = 1.2;
       pen.beginPath();
@@ -530,14 +543,14 @@ function drawWeather(now) {
       pen.lineTo(particle.x + particle.size * 0.18 * windy, particle.y + particle.size);
       pen.stroke();
     } else if (particle.kind === "flake") {
-      particle.y += particle.speed * STEP;
-      particle.x += Math.sin(now / 1000 + particle.sway) * 0.5 * STEP;
+      particle.y += particle.speed * step;
+      particle.x += Math.sin(now / 1000 + particle.sway) * 0.5 * step;
       pen.fillStyle = "rgba(255, 255, 255, 0.9)";
       pen.beginPath();
       pen.arc(particle.x, particle.y, particle.size, 0, Math.PI * 2);
       pen.fill();
     } else {
-      particle.x += particle.speed * STEP;
+      particle.x += particle.speed * step;
       const bank = pen.createRadialGradient(particle.x, particle.y, 10, particle.x, particle.y, particle.size);
       bank.addColorStop(0, light.name === "night" ? "rgba(170, 180, 200, 0.26)" : "rgba(240, 244, 248, 0.34)");
       bank.addColorStop(1, "rgba(240, 244, 248, 0)");
@@ -668,7 +681,7 @@ function drawFrontFx(now) {
   }
 
   // Sometimes a new lens bubble starts below the gap
-  if (fxBubbles.length < 4 && Math.random() < 0.003 * STEP) {
+  if (fxBubbles.length < 4 && Math.random() < 0.003 * step) {
     fxBubbles.push({x: 40 + Math.random() * 400, y: 350, radius: 8 + Math.random() * 12,
       speed: 0.25 + Math.random() * 0.25, sway: Math.random() * Math.PI * 2});
   }
@@ -706,7 +719,7 @@ function drawFrontFx(now) {
 
   // Each bubble rises, sways a little and leaves at the top
   for (const bubble of [...fxBubbles]) {
-    bubble.y -= bubble.speed * STEP;
+    bubble.y -= bubble.speed * step;
     lensBubble(pen, bubble.x + Math.sin(time + bubble.sway) * 4, bubble.y, bubble.radius, 1);
 
     // Gone off the top: forget it
@@ -772,15 +785,69 @@ function drawGlow(now) {
   }
 }
 
-// One frame (capped at FPS a second)
+// Switch the lite look on or off: solid glass, only the hare and the weather moving, and fewer frames
+function setLite(on) {
+  // Nothing to change
+  if (on === wall.lite) {
+    return;
+  }
+  wall.lite = on;
+  fps = on ? LITE_FPS : FULL_FPS;
+  step = 30 / fps;
+  showScene();
+}
+
+// Lite by itself: on while the chip is hot or for a while after the frames couldn't keep up, off once both are fine
+function autoLite(now) {
+  // A forced look never changes
+  if (LITE_FORCED === "1" || LITE_FORCED === "0") {
+    return;
+  }
+  setLite(hot || now < slowUntil);
+}
+
+// Hear the chip's temperature from Nestor (called by the cards with each update)
+function chipHeat(celsius) {
+  // Hot from 80 °C, cool again from 74 °C (no flicking back and forth in between)
+  if (celsius !== null && celsius >= HOT) {
+    hot = true;
+  } else if (celsius !== null && celsius <= COOL) {
+    hot = false;
+  }
+  autoLite(performance.now());
+}
+
+// Count the frames drawn; two slow stretches in a row in the full look mean the board can't keep up
+function countFrame(now) {
+  framesCounted += 1;
+
+  // Judge every 10 seconds
+  if (now - countStart < SLOW_CHECK_MS) {
+    return;
+  }
+  const rate = framesCounted * 1000 / (now - countStart);
+  slowCount = !wall.lite && countStart && rate < SLOW_FPS ? slowCount + 1 : 0;
+  framesCounted = 0;
+  countStart = now;
+
+  // Too slow twice: lite for 10 minutes
+  if (slowCount >= 2) {
+    slowUntil = now + SLOW_LITE_MS;
+    slowCount = 0;
+  }
+  autoLite(now);
+}
+
+// One frame (capped at fps a second)
 function frame(now) {
   requestAnimationFrame(frame);
 
   // Skip frames to stay at the frame rate
-  if (now - lastFrame < 1000 / FPS - 3) {
+  if (now - lastFrame < 1000 / fps - 3) {
     return;
   }
   lastFrame = now;
+  countFrame(now);
   drawGlow(now);
 
   // The night clock covers the scene: nothing else needs drawing
@@ -798,7 +865,7 @@ function frame(now) {
 
 // Load every pose of the hare and the pool's mask, then start the light and the frames (?lite=1 forces the lite look)
 function startScene() {
-  wall.lite = new URLSearchParams(location.search).get("lite") === "1";
+  setLite(LITE_FORCED === "1");
   // Every pose of the hare
   for (const pose of Object.keys(POSES.poses)) {
     images[pose] = new Image();

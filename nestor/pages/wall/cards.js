@@ -16,6 +16,9 @@ const BIG_TITLES = {days: "Your week", weather: "Weather · next 12 hours", fenc
 const BIG_VIEWS = {week: "days", weather: "weather", fencing: "fencing"};  // John's names for the screens
 const big = {open: null, closesAt: 0};
 let bigSeen = null;  // The last bigger-screen request from John that was acted on
+const OFFLINE_AFTER = 2;  // Updates missed in a row before the wall shows it's reconnecting
+let missed = 0;
+let offline = false;
 
 // Make text safe to put in the page (titles and places come from your calendar)
 function esc(text) {
@@ -199,12 +202,14 @@ function renderCards() {
     '<span id="clock" style="font-size:112px;font-weight:300;line-height:0.85;letter-spacing:-2px"></span>' +
     '<span id="ampm" style="font-size:24px;padding-bottom:8px"></span></div>' +
     `<div id="date" style="font-size:21px;margin-top:8px"></div>${weatherLine()}` +
+    (offline ? '<div class="offbadge">Reconnecting to Nestor…</div>' : "") +
     '<div class="chips" id="chips"></div></div>';
   const later = `<div class="glass pad stack tapme${below > 1 ? " tight" : ""}" data-open="days" ` +
     'style="flex:1;gap:2px;min-height:0;overflow:hidden">' +
     `<div class="row"><span class="label">Later today</span>${header}</div>${laterRows()}</div>`;
   const rail = later + (data.trains ? trainCard() : "") + (data.foil.length ? foilCard() : "") +
     (data.music ? musicCard() : "");
+  document.getElementById("cards").classList.toggle("offline", offline);
   document.getElementById("cards").innerHTML = '<div style="position:absolute;inset:10px;display:grid;' +
     'grid-template-columns:1.4fr 1fr;gap:10px">' +
     `<div class="stack" style="justify-content:space-between;padding:6px 6px 0">${clock}` +
@@ -246,7 +251,24 @@ function showClock() {
   }
 }
 
-// Ask Nestor for everything the wall shows, then redraw the cards and tell the scene the weather
+// Note whether Nestor answers: after two missed updates the cards dim with a "Reconnecting" badge, and they come back
+// with the first answer
+function setOffline(missedOne) {
+  missed = missedOne ? missed + 1 : 0;
+  const now = missed >= OFFLINE_AFTER;
+
+  // Only a change redraws the cards (there must be something to show)
+  if (now !== offline) {
+    offline = now;
+
+    // Redraw what's there, dimmed or not
+    if (data) {
+      renderCards();
+    }
+  }
+}
+
+// Ask Nestor for everything the wall shows, then redraw the cards and tell the scene the weather and the chip's heat
 async function refresh() {
   // A failed check keeps what's showing until the next one
   try {
@@ -257,16 +279,22 @@ async function refresh() {
       const first = !data;
       data = await reply.json();
       fetchedAt = Date.now();
+      missed = 0;
+      offline = false;
       setScene(data.weather);
+      chipHeat(data.chip_temp);
       renderCards();
 
       // ?open=days (or weather, fencing) opens a bigger screen when the page loads, for checking it
       if (first && new URLSearchParams(location.search).get("open")) {
         openBig(new URLSearchParams(location.search).get("open"));
       }
+    } else {
+      setOffline(true);
     }
   } catch (error) {
     console.warn("The wall couldn't reach Nestor:", error);
+    setOffline(true);
   }
 }
 // Tell Nestor to stop or snooze what's ringing, then say what happened
