@@ -358,10 +358,12 @@ def create_app(announcer, settings):
     def screen():
         return send_from_directory(WALL_DIR, "index.html")
 
-    # The wall display's scripts, pictures and fonts
+    # The wall display's scripts, pictures and fonts (only pictures and fonts are kept by the browser, so a changed
+    # script shows as soon as the page reloads)
     @app.get("/screen/<path:file_name>")
     def screen_file(file_name):
-        return send_from_directory(WALL_DIR, file_name, max_age=3600)
+        keep = file_name.startswith(("img/", "fonts/"))
+        return send_from_directory(WALL_DIR, file_name, max_age=3600 if keep else 0)
 
     # Everything the wall display shows right now: weather, the next event, Later today, trains, music, men's foil
     @app.get("/wall/state")
