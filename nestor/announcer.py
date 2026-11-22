@@ -74,6 +74,7 @@ class Announcer:
         self.base_url = base_url
         self.voice = settings.get("voice", "en-US-EmmaMultilingualNeural")
         self.voice_rate = settings.get("voice_rate", "+0%")
+        self.voice_pitch = settings.get("voice_pitch", "+0Hz")  # e.g. "-4Hz" for a lower voice
         self.chime_file = chime.ensure_chime() if settings.get("chime", True) else None
         self.quiet_hours = QuietHours(settings.get("quiet_hours", ""))
         self.held_lock = threading.Lock()
@@ -95,11 +96,12 @@ class Announcer:
         self.jobs.put((texts, done, with_chime, volume))
         return done
 
-    # Queue a short sound (a WAV in the cache folder that lasts the given seconds) with no chime, and return an event
-    # set once it has played
-    def sound(self, file_name, seconds, volume=None):
+    # Queue a short sound (a WAV in the cache folder that lasts the given seconds, or one of John's short spoken clips
+    # as an mp3) with no chime, and return an event set once it has played. Sounds don't count as speaking, so John
+    # keeps what's said right after them.
+    def sound(self, file_name, seconds, volume=None, content_type="audio/wav"):
         done = threading.Event()
-        self.jobs.put(([{"sound": file_name, "seconds": seconds}], done, False, volume))
+        self.jobs.put(([{"sound": file_name, "seconds": seconds, "type": content_type}], done, False, volume))
         return done
 
     # True while something is playing or waiting to play (John doesn't listen then, so he doesn't hear the speaker)
@@ -217,7 +219,7 @@ class Announcer:
         if not items:
             return
         audio = [item if isinstance(item, dict) else {"text": item, "speech": tts.make_speech(item, self.voice,
-                 self.voice_rate)} for item in items]
+                 self.voice_rate, self.voice_pitch)} for item in items]
         saved = self.speaker.snapshot()
         self.speaker.interrupted.clear()
         spotify.duck()  # Spotify on the phone or laptop goes quieter while Nestor speaks
@@ -235,9 +237,9 @@ class Announcer:
 
             # Play each sound or message in turn, stopping if John cuts in
             for item in audio:
-                # Sounds are short WAVs timed by their known length; messages are speech
+                # Sounds (short WAVs and John's spoken clips) are timed by their known length; messages are speech
                 if "sound" in item:
-                    result = self.speaker.play_and_wait(self.media_url(item["sound"]), "audio/wav",
+                    result = self.speaker.play_and_wait(self.media_url(item["sound"]), item.get("type", "audio/wav"),
                                                         expected_seconds=item["seconds"])
                 else:
                     log.info("Speaking: %s", item["text"])

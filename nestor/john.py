@@ -12,6 +12,7 @@ import numpy
 import openwakeword.utils
 from openwakeword.model import Model as WakeWordModel
 from openwakeword.vad import VAD
+from nestor import clips
 from nestor import govee
 from nestor import routines
 from nestor import spotify
@@ -42,7 +43,8 @@ NUMBER_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, 
                 "ten": 10, "eleven": 11, "twelve": 12, "fifteen": 15, "twenty": 20, "thirty": 30, "forty": 40,
                 "forty-five": 45, "forty five": 45, "fifty": 50, "sixty": 60}
 ANSWER_TIMEOUT_SECONDS = 180
-THINKING_AFTER_SECONDS = 2.5  # Play the thinking sound if Claude takes longer than this
+THINKING_AFTER_SECONDS = 2.5  # Say a thinking line ("One sec chief.") if Claude takes longer than this
+CLIP_TIMEOUT_SECONDS = 8  # The longest John waits for his start word to finish before listening anyway
 WAKE_PHRASE = re.compile(r"\b(hey|hi|okay|ok),?\s+(john|jon|jarvis)\b[,.!?]*", re.IGNORECASE)
 # "Hey John" at the start of a phrase, with at most one word before it (like "um")
 WAKE_START = re.compile(r"^\W*(?:\w+\W+)?(hey|hi|okay|ok)\W+(john|jon)\b\W*", re.IGNORECASE)
@@ -167,6 +169,7 @@ class John:
             self.plain = not self.speech_to_text.punctuates
             rail = RailData(self.secrets.get("NJT_USERNAME"), self.secrets.get("NJT_PASSWORD"))
             self.brain = Brain(self.announcer, self.settings, self.secrets["ANTHROPIC_API_KEY"], rail)
+            clips.prepare(self.announcer)  # His start words and thinking lines, made ahead of time
         except Exception as error:
             log.error("Hey John couldn't start: %s", error)
             return
@@ -278,17 +281,22 @@ class John:
         wait_seconds = FIRST_WAIT_SECONDS
         first_round = True
 
-        # Asked in one breath: a "got it" tone and straight to the answer; otherwise the listening tone
+        # Asked in one breath: a "got it" tone and straight to the answer; otherwise he says his word ("Yes boss?")
         if heard:
             self.recorder.stop()
             play_sound(self.announcer, "done")
         else:
-            play_sound(self.announcer, "listening")
+            self.say_start_word()
 
         # Each round is one thing said and John's answer
         while True:
-            wall_live.set_john("listening" if first_round else "followup")
+            # A follow-up: a soft tone says he's still listening, and the glow dims as the time runs out
+            if not first_round:
+                play_sound(self.announcer, "followup")
+                self.dim_glow(wait_seconds)
+            wall_live.set_john("listening" if first_round else "followup", 0 if first_round else wait_seconds)
             heard = heard or self.listen(wait_seconds)
+            self.dim_glow(0)
             first_round = False
 
             # Nobody spoke, or he was told to stop: the conversation is over
@@ -332,6 +340,34 @@ class John:
             # No follow-up while music plays: the microphone would take the music for speech
             if spotify.music_playing():
                 return
+
+    # Say his word for being called ("Yes boss?", "Go on.", a different one each time), with the microphone off so he
+    # doesn't hear himself, then listen; the listening tone instead if the word can't be made
+    def say_start_word(self):
+        self.recorder.stop()
+
+        # The speech service may be unreachable for a moment
+        try:
+            clips.play_clip(self.announcer, "start").wait(CLIP_TIMEOUT_SECONDS)
+        except Exception as error:
+            log.warning("Couldn't say John's start word: %s", error)
+            play_sound(self.announcer, "listening")
+        self.recorder.start()
+
+    # Dim the lights' glow to nothing over this many seconds (the follow-up window); 0 puts it back to full
+    def dim_glow(self, seconds):
+        # Only with lights
+        if govee.lights:
+            govee.lights.fade_glow(seconds)
+
+    # Say a line while a longer answer is on its way ("One sec chief."); the thinking taps if it can't be made
+    def say_thinking_line(self):
+        # The speech service may be unreachable for a moment
+        try:
+            clips.play_clip(self.announcer, "thinking")
+        except Exception as error:
+            log.warning("Couldn't say John's thinking line: %s", error)
+            play_sound(self.announcer, "thinking")
 
     # True if something is ringing, the speaker is in a quiet gap between bursts, and this moment sounds like a voice
     def voice_in_ringing_gap(self, frame):
@@ -450,9 +486,9 @@ class John:
     def transcribe(self, samples, speech_to_text=None):
         return (speech_to_text or self.speech_to_text).transcribe(samples)
 
-    # Ask the brain, playing the thinking sound if it takes a while, and the error sound if it fails
+    # Ask the brain, saying a thinking line if it takes a while, and playing the error sound if it fails
     def answer(self, heard):
-        thinking = threading.Timer(THINKING_AFTER_SECONDS, play_sound, args=(self.announcer, "thinking"))
+        thinking = threading.Timer(THINKING_AFTER_SECONDS, self.say_thinking_line)
         thinking.start()
 
         # A failed answer is said out loud rather than left as silence

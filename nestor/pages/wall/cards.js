@@ -464,6 +464,12 @@ function followLive() {
     wall.john = live.john;
     wall.ringing = Boolean(live.ringing);
     wall.sleeping = live.sleeping;
+    wall.johnWindow = live.john_window || 0;
+
+    // A new follow-up starts the glow's dimming from now
+    if (live.john === "followup" && before.john !== "followup") {
+      wall.followupSince = performance.now();
+    }
     const request = live.big;
 
     // A ring starting, ending or changing redraws the left card (and a new ring closes a bigger screen)

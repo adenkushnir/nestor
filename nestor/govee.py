@@ -153,6 +153,7 @@ class GoveeLights:
         self.glow_stop = threading.Event()
         self.glowing = False
         self.glow_restore = True  # Whether ending the glow puts the lights back (not if something new was set)
+        self.glow_fade = None  # (when it started, seconds) while the glow dims through a follow-up window
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.socket.bind(("0.0.0.0", REPLY_PORT))
@@ -589,6 +590,7 @@ class GoveeLights:
             return
         self.glowing = True
         self.glow_restore = True
+        self.glow_fade = None
         self.glow_stop.clear()
         threading.Thread(target=self.glow, name="govee-glow", daemon=True).start()
 
@@ -605,6 +607,11 @@ class GoveeLights:
             # Breathe until stopped, with a look for changes made in another app before each breath
             while not self.glow_stop.is_set():
                 level = 45 + 35 * (0.5 - 0.5 * math.cos(2 * math.pi * (time.time() - started) / 3))
+                fade = self.glow_fade
+
+                # Through a follow-up window the glow dims towards nothing as the time runs out
+                if fade:
+                    level *= max(0.03, 1 - (time.time() - fade[0]) / fade[1])
 
                 # Every signal light (but not one an app has taken)
                 for ip in allowed:
@@ -620,6 +627,10 @@ class GoveeLights:
             self.hand_back(ips)
             self.glowing = False
             self.busy.release()
+
+    # Dim John's glow to nothing over this many seconds (his follow-up window); 0 brings it back to full
+    def fade_glow(self, seconds):
+        self.glow_fade = (time.time(), seconds) if seconds else None
 
     # Stop John's glow; restore=False leaves the lights to whatever was just set instead
     def end_glow(self, restore=True):
