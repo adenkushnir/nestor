@@ -20,7 +20,7 @@ MAX_TOOL_RESULT = 12000  # Characters; a tool result longer than this is cut, so
 TEXT = {"type": "string"}
 WHICH_LIGHTS = {"type": "string", "description": "Which lights, in the user's words: 'the lights', 'the wall', 'both "
                 "lights', or a group name; empty if they didn't say"}
-WEB_SEARCH = {"type": "web_search_20260209", "name": "web_search", "max_uses": 3}
+WEB_SEARCH = {"type": "web_search_20260209", "name": "web_search", "max_uses": 8}
 log = logging.getLogger(__name__)
 
 # A tool definition for Claude: every listed property is required, and tools with several inputs get a strict schema

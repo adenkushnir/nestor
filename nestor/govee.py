@@ -23,6 +23,8 @@ MOODS_PATH = os.path.join(DATA_DIR, "moods.json")
 SCAN_EVERY_SECONDS = 600
 FRAME_SECONDS = 0.25  # How often an animated mood changes (a few messages a second per light)
 STATUS_WAIT_SECONDS = 0.8  # How long to wait for the lights to say what they're showing
+QUICK_WAIT_SECONDS = 0.4  # The same, for the look Nestor takes before each change it sends
+ANSWERED_SECONDS = 10  # A light that answered this recently is waited for before a change
 EFFECTS = ("steady", "breathe", "drift", "flicker", "lightning", "party")
 SPEEDS = {"slow": 2.0, "medium": 1.0, "fast": 0.5}  # Each effect's period is multiplied by this
 NAMED_COLORS = {"red": (255, 0, 0), "orange": (255, 110, 0), "amber": (255, 150, 0), "gold": (255, 190, 40),
@@ -37,7 +39,7 @@ JOHN_COLOR = (14, 134, 196)  # Datebook's aqua
 SUNRISE_SECONDS = 120
 GOODNIGHT_SECONDS = 60
 ALL_LIGHTS_WORDS = ("all", "everything", "every", "all of", "all of them", "both", "both of", "both of them")
-CHECK_SECONDS = 1.5  # How often lights in a mood are checked for changes made in another app
+CHECK_SECONDS = 1.5  # How often lights in a steady mood are checked for changes made in another app
 CHANGE_STRIKES = 2  # Checks in a row a light must show something else before it counts as changed elsewhere
 RECENT_SECONDS = 4  # Frames sent this recently count as Nestor's when checking
 HISTORY_FRAMES = 60
@@ -116,13 +118,18 @@ def mood_frame(mood, t, place, flash=False):
     else:
         return colors[0], brightness
 
+# One frame of a playing mood for each of its lights, each at its own place in the effect: {IP address: (colour,
+# brightness)}
+def mood_frames(entry, t, flash=False):
+    return {ip: mood_frame(entry["mood"], t, place, flash) for place, ip in enumerate(sorted(entry["ips"]))}
+
 # The lights: commands, moods (each group of lights can play its own) and signals. Everything does nothing if no
 # lights are found.
 class GoveeLights:
-    # Open the reply port, find the lights in the background, and start the mood player and the watch for changes made
-    # in other apps. groups names sets of lights by their Govee device ids, e.g. {"wall": ["2F:3A:..."], "living room":
-    # ["04:DC:...", "04:5B:..."]}; plain_lights is the group plain "lights" means and signal_lights the group alerts
-    # and John's glow use ("" for every light).
+    # Open the reply port, find the lights in the background, and start the mood player (which also watches for changes
+    # made in other apps). groups names sets of lights by their Govee device ids, e.g. {"wall": ["2F:3A:..."],
+    # "living room": ["04:DC:...", "04:5B:..."]}; plain_lights is the group plain "lights" means and signal_lights the
+    # group alerts and John's glow use ("" for every light).
     def __init__(self, groups=None, plain_lights="", signal_lights=""):
         global lights
         self.devices = read_json(DEVICES_PATH, {})  # IP address: {"sku", "device"}
@@ -134,10 +141,14 @@ class GoveeLights:
         self.moods = []  # The moods playing, each {"mood", "ips" (its lights), "started", "flash_until"}
         self.moods_lock = threading.RLock()
         self.sent = {}  # IP address: (colour, brightness) last sent by the mood player, to skip repeats
-        self.history = {}  # IP address: recent (time, colour, brightness) sent, to tell Nestor's frames from an app's
+        self.history = {}  # IP address: recent (time, colour, brightness, kelvin) sent, to tell Nestor's frames from an
+        # app's (colour None when only the brightness was sent)
         self.strikes = {}  # IP address: checks in a row where the light showed something Nestor didn't send
-        self.kelvins = {}  # IP address: the white setting it reported while showing Nestor's mood
+        self.checked = {}  # IP address: when it was last checked
+        self.kelvins = {}  # IP address: the white setting it reported while showing Nestor's colours
         self.signalling = set()  # Lights a signal, John's glow or a fade is using right now (moods skip them)
+        self.released = set()  # Signal lights changed in another app during this signal: left as the app set them
+        self.expect_off = set()  # Signal lights that were off when it started (off is still right for them)
         self.busy = threading.Lock()  # Held while a signal, the glow or a fade plays
         self.glow_stop = threading.Event()
         self.glowing = False
@@ -149,7 +160,6 @@ class GoveeLights:
         threading.Thread(target=self.listen, name="govee-replies", daemon=True).start()
         threading.Thread(target=self.keep_scanning, name="govee-scan", daemon=True).start()
         threading.Thread(target=self.play_moods, name="govee-moods", daemon=True).start()
-        threading.Thread(target=self.watch_for_changes, name="govee-watch", daemon=True).start()
 
     # Send one command to one light
     def send(self, ip, command, data):
@@ -266,6 +276,12 @@ class GoveeLights:
     def show(self, ip, color, brightness, kelvin=0):
         self.send(ip, "colorwc", {"color": dict(zip("rgb", color)), "colorTemInKelvin": kelvin})
         self.send(ip, "brightness", {"value": max(1, min(100, round(brightness)))})
+        self.remember_sent(ip, color, brightness, kelvin)
+
+    # Note what Nestor just sent a light, to tell it apart from changes made in another app
+    def remember_sent(self, ip, color, brightness, kelvin=0):
+        frame = (time.time(), color, max(1, min(100, round(brightness))), kelvin)
+        self.history.setdefault(ip, deque(maxlen=HISTORY_FRAMES)).append(frame)
 
     # Read every reply the lights send: answers to "who's there?" and what each one shows
     def listen(self):
@@ -308,19 +324,21 @@ class GoveeLights:
                 log.warning("Couldn't look for Govee lights: %s", error)
             time.sleep(SCAN_EVERY_SECONDS)
 
-    # What some lights (every light unless given) show right now, asked fresh, as {IP address: status}
-    def capture(self, ips=None):
+    # What some lights (every light unless given) show right now, asked fresh, as {IP address: status}. quick waits
+    # less, and only for lights that answered lately, so a light that's unplugged doesn't hold up the others.
+    def capture(self, ips=None, quick=False):
         ips = set(self.devices) if ips is None else set(ips)
         asked = time.time()
+        waiting = {ip for ip in ips if asked - self.status_times.get(ip, 0) < ANSWERED_SECONDS} if quick else ips
 
         # Ask each light
         for ip in ips:
             self.send(ip, "devStatus", {})
-        gives_up = asked + STATUS_WAIT_SECONDS
+        gives_up = asked + (QUICK_WAIT_SECONDS if quick else STATUS_WAIT_SECONDS)
 
         # Wait until they've all answered, or a moment has passed
-        while time.time() < gives_up and any(self.status_times.get(ip, 0) < asked for ip in ips):
-            time.sleep(0.05)
+        while time.time() < gives_up and any(self.status_times.get(ip, 0) < asked for ip in waiting):
+            time.sleep(0.02)
         return {ip: dict(self.status[ip]) for ip in ips if self.status_times.get(ip, 0) >= asked}
 
     # Put the lights back the way capture() found them
@@ -336,12 +354,15 @@ class GoveeLights:
                 self.send(ip, "turn", {"value": 1})
                 self.show(ip, color, status.get("brightness", 100), status.get("colorTemInKelvin", 0))
 
-    # Background loop: show each mood's next frame on its own lights (lights a signal is using sit it out)
+    # Background loop: show each mood's next frame on its own lights (lights a signal is using sit it out). Before a
+    # light gets a new frame, it's checked for a change made in another app, so a mood never paints over one; lights
+    # holding still are checked every moment or two.
     def play_moods(self):
         # For the life of the program
         while True:
             time.sleep(FRAME_SECONDS)
             now = time.time()
+            frames = {}
 
             # Each mood playing
             for entry in list(self.moods):
@@ -351,19 +372,25 @@ class GoveeLights:
                 # Lightning strikes now and then
                 if mood.get("effect") == "lightning" and now > entry["flash_until"] and random.random() < 0.04 / speed:
                     entry["flash_until"] = now + FRAME_SECONDS * 1.5
-                self.show_frame(entry, now - entry["started"], now < entry["flash_until"])
+                frames.update(mood_frames(entry, now - entry["started"], now < entry["flash_until"]))
+            due = {ip for ip, frame in frames.items() if ip not in self.signalling and
+                   (self.sent.get(ip) != frame or self.strikes.get(ip) or
+                    now - self.checked.get(ip, 0) >= CHECK_SECONDS)}
 
-    # Show one frame of a mood on its lights, sending each light only what changed
-    def show_frame(self, entry, t, flash=False):
-        # Each of its lights, at its own place in the effect
-        for place, ip in enumerate(sorted(entry["ips"])):
-            color, brightness = mood_frame(entry["mood"], t, place, flash)
+            # Only lights about to change, waiting for a second look, or not looked at lately are checked
+            if due:
+                allowed = self.check_lights(due)
+                mood_ips = self.mood_ips()
+                self.show_frames({ip: frame for ip, frame in frames.items() if ip in allowed and ip in mood_ips})
 
+    # Show a mood's frame on its lights, sending each light only what changed
+    def show_frames(self, frames):
+        # Each light and its frame
+        for ip, (color, brightness) in frames.items():
             # Only changes are sent, to keep Wi-Fi traffic low; a light a signal is using waits
             if ip not in self.signalling and self.sent.get(ip) != (color, brightness):
                 self.show(ip, color, brightness)
                 self.sent[ip] = (color, brightness)
-                self.history.setdefault(ip, deque(maxlen=HISTORY_FRAMES)).append((time.time(), color, brightness))
 
     # Start a mood on these lights (they leave any mood they were in; John's glow gives way if it's on them). Returns
     # the mood.
@@ -380,7 +407,7 @@ class GoveeLights:
             self.power(True, ips)
             entry = {"mood": dict(mood), "ips": ips, "started": time.time(), "flash_until": 0.0}
             self.moods = self.moods + [entry]
-        self.show_frame(entry, 0)
+        self.show_frames(mood_frames(entry, 0))
         return entry["mood"]
 
     # Show a mood (a dict with name, colors, effect, speed and brightness) on the lights a name means: plain "lights",
@@ -427,54 +454,67 @@ class GoveeLights:
             raise ValueError("no mood is showing on those lights to change")
         return self.start_mood(dict(entry["mood"], **changes), entry["ips"])
 
-    # Whether a light's status is something Nestor's mood sent it lately (small rounding allowed). Nothing sent yet
-    # counts as a match.
+    # Whether a light's status is something Nestor sent it lately (small rounding allowed). Nothing sent yet counts as
+    # a match.
     def matches_sent(self, ip, status):
         sent = list(self.history.get(ip, []))
 
-        # Off is never a mood; with nothing sent there's nothing to compare
+        # Off is only right for a signal light that was off already; with nothing sent there's nothing to compare
         if not status.get("onOff"):
-            return False
+            return ip in self.expect_off
         elif not sent:
             return True
         recent = [frame for frame in sent if time.time() - frame[0] <= RECENT_SECONDS] + sent[-1:]
         color = tuple(int((status.get("color") or {}).get(part, -99)) for part in "rgb")
         brightness = int(status.get("brightness", -99))
         kelvin = status.get("colorTemInKelvin") or 0
-        same_color = any(all(abs(shown - sent_part) <= COLOR_SLACK for shown, sent_part in zip(color, frame[1]))
+        # A frame with no colour (only dimmed) matches any colour, and a white one (the sunrise) any white, since
+        # lights round their white settings
+        same_color = any(frame[1] is None or (frame[3] and kelvin) or
+                         all(abs(shown - sent_part) <= COLOR_SLACK for shown, sent_part in zip(color, frame[1]))
                          for frame in recent)
         same_brightness = any(abs(brightness - frame[2]) <= BRIGHTNESS_SLACK for frame in recent)
-        return same_color and same_brightness and self.kelvins.setdefault(ip, kelvin) == kelvin
+        # Lights showing Nestor's colours keep reporting the same white setting; a new one means an app set white
+        same_white = (any(frame[3] or frame[1] is None for frame in recent) or
+                      self.kelvins.setdefault(ip, kelvin) == kelvin)
+        return same_color and same_brightness and same_white
 
-    # Background loop: every moment or two, check the lights playing a mood still show what Nestor sent. A light
-    # showing something else twice in a row was changed in another app (like Google Home), so its group leaves the
-    # mood and keeps what the app set.
-    def watch_for_changes(self):
-        # For the life of the program
-        while True:
-            time.sleep(CHECK_SECONDS)
-            watched = self.mood_ips() - self.signalling
+    # Look at lights Nestor is about to change, and return the ones it may change now. A light showing something
+    # Nestor didn't send waits for a second look; showing it again, it was changed in another app (like Google Home or
+    # Govee), and the app wins: its group is let go.
+    def check_lights(self, ips):
+        allowed = set(ips)
 
-            # Only lights in a mood that no signal is using
-            if not watched:
-                continue
-            captured = self.capture(watched)
+        # Each light that answered
+        for ip, status in self.capture(ips, quick=True).items():
+            self.checked[ip] = time.time()
 
-            # Each light that answered
-            for ip, status in captured.items():
-                # Nestor's own frame resets the count; anything else adds to it
-                if self.matches_sent(ip, status):
-                    self.strikes[ip] = 0
-                else:
-                    self.strikes[ip] = self.strikes.get(ip, 0) + 1
+            # Nestor's own frame resets the count; anything else adds to it and holds the light for now
+            if self.matches_sent(ip, status):
+                self.strikes[ip] = 0
+            else:
+                self.strikes[ip] = self.strikes.get(ip, 0) + 1
+                allowed.discard(ip)
 
-                # Twice in a row, and still in a mood: it was changed elsewhere
-                if self.strikes.get(ip, 0) >= CHANGE_STRIKES and ip in self.mood_ips():
-                    group = self.group_ips(ip)
-                    log.info("The %s changed in another app (now %s); %s the mood",
-                             " and ".join(self.group_names(group)) or ip, describe_status(status),
-                             "it leaves" if len(group) == 1 else "they leave")
-                    self.leave_moods(group)
+            # Twice in a row: it was changed elsewhere
+            if self.strikes.get(ip, 0) >= CHANGE_STRIKES:
+                self.let_go(ip, status)
+        return allowed - self.released
+
+    # A light was changed in another app: its group leaves any mood, and any signal, glow or fade using it stops
+    # there and doesn't put it back, so it keeps what the app set
+    def let_go(self, ip, status):
+        group = self.group_ips(ip)
+        moods = self.mood_ips() & group
+        signals = self.signalling & group
+
+        # Only say it once
+        if moods or signals - self.released:
+            log.info("The %s changed in another app (now %s); Nestor lets go of %s",
+                     " and ".join(self.group_names(group)) or ip, describe_status(status),
+                     "it" if len(group) == 1 else "them")
+        self.released |= signals
+        self.leave_moods(group)
 
     # Play a short signal on the signal lights, then go back to what was showing (a mood picks up again by itself);
     # skipped if another signal is playing. frames is a list of (colour, brightness, seconds).
@@ -487,19 +527,38 @@ class GoveeLights:
 
         # Always give the lights back, even if a command fails
         try:
-            self.signalling = set(ips)
-            captured = self.capture(ips - self.mood_ips())
+            captured = self.take(ips)
+            allowed = ips
 
-            # Each step of the signal
+            # Each step of the signal, then a look for changes made in another app before the next
             for color, brightness, seconds in frames:
-                # Every signal light at once
-                for ip in ips:
+                # Every signal light at once (but not one an app has taken)
+                for ip in allowed:
                     self.show(ip, color, brightness)
                 time.sleep(seconds)
-            self.restore(captured)
+                allowed = self.check_lights(ips - self.released)
+            self.restore(self.unreleased(captured))
         finally:
             self.hand_back(ips)
             self.busy.release()
+
+    # Before a signal, the glow or a fade: these lights are Nestor's for now. Returns what the ones outside a mood
+    # show, to put back afterwards (and those found off may stay off without counting as changed in an app).
+    def take(self, ips):
+        self.signalling = set(ips)
+        self.released = set()
+
+        # Each light starts with a clean slate
+        for ip in ips:
+            self.strikes.pop(ip, None)
+            self.kelvins.pop(ip, None)
+        captured = self.capture(set(ips) - self.mood_ips())
+        self.expect_off = {ip for ip, status in captured.items() if not status.get("onOff")}
+        return captured
+
+    # What capture() found, minus the lights changed in another app meanwhile (they keep what the app set)
+    def unreleased(self, captured):
+        return {ip: status for ip, status in captured.items() if ip not in self.released}
 
     # After a signal: the mood player sends those lights their frame again
     def hand_back(self, ips):
@@ -507,7 +566,10 @@ class GoveeLights:
         for ip in ips:
             self.sent.pop(ip, None)
             self.strikes.pop(ip, None)
+            self.kelvins.pop(ip, None)
         self.signalling = set()
+        self.released = set()
+        self.expect_off = set()
 
     # Flash for an alert: white for most, an amber pulse for a leave-by, red for "leave now"
     def alert(self, text, source="", key=""):
@@ -536,22 +598,24 @@ class GoveeLights:
 
         # Always hand the lights back
         try:
-            self.signalling = set(ips)
-            captured = self.capture(ips - self.mood_ips())
+            captured = self.take(ips)
             started = time.time()
+            allowed = ips
 
-            # Breathe until stopped
+            # Breathe until stopped, with a look for changes made in another app before each breath
             while not self.glow_stop.is_set():
                 level = 45 + 35 * (0.5 - 0.5 * math.cos(2 * math.pi * (time.time() - started) / 3))
 
-                # Every signal light
-                for ip in ips:
+                # Every signal light (but not one an app has taken)
+                for ip in allowed:
                     self.show(ip, JOHN_COLOR, level)
                 self.glow_stop.wait(0.4)
+                allowed = self.check_lights(ips - self.released)
 
-            # Go back, unless something new (a mood, a colour) was set on these lights while glowing
+            # Go back, unless something new (a mood, a colour) was set on these lights while glowing; lights changed in
+            # another app keep what the app set
             if self.glow_restore:
-                self.restore(captured)
+                self.restore(self.unreleased(captured))
         finally:
             self.hand_back(ips)
             self.glowing = False
@@ -582,15 +646,19 @@ class GoveeLights:
         if not self.devices or not self.busy.acquire(timeout=10):
             return
 
+        every_light = set(self.devices)
+
         # Always hand the lights back
         try:
-            self.leave_moods(set(self.devices))
-            self.signalling = set(self.devices)
-            start = self.capture()
+            self.leave_moods(every_light)
+            start = self.take(every_light)
+            allowed = every_light
 
-            # Sunrise: candle to daylight while brightening; goodnight: each light dims from where it was, then off
+            # Sunrise: candle to daylight while brightening; goodnight: each light dims from where it was, then off.
+            # Before each step, a look for changes made in another app: a light changed there drops out of the fade.
             if which == "sunrise":
                 self.power(True)
+                self.expect_off = set()  # Every light is on now
                 steps = SUNRISE_SECONDS // 2
 
                 # One step every 2 seconds, brightening faster at the end like a real sunrise
@@ -598,27 +666,27 @@ class GoveeLights:
                     share = step / steps
                     kelvin = round(2000 + 4500 * share)
 
-                    # Every light
-                    for ip in self.devices:
-                        self.send(ip, "colorwc", {"color": dict(zip("rgb", kelvin_color(kelvin))),
-                                                  "colorTemInKelvin": kelvin})
-                        self.send(ip, "brightness", {"value": max(1, round(100 * share ** 1.6))})
+                    # Every light an app hasn't taken
+                    for ip in allowed:
+                        self.show(ip, kelvin_color(kelvin), 100 * share ** 1.6, kelvin)
                     time.sleep(2)
+                    allowed = self.check_lights(every_light - self.released)
             else:
                 steps = GOODNIGHT_SECONDS // 2
+                lit = {ip for ip, status in start.items() if status.get("onOff")}  # Lights already off stay off
 
-                # One step every 2 seconds down to the dimmest, then off
+                # One step every 2 seconds down to the dimmest (just the brightness, so an app's scene keeps playing)
                 for step in range(steps + 1):
-                    # Every light that was on
-                    for ip, status in start.items():
-                        # Lights already off stay off
-                        if status.get("onOff"):
-                            self.send(ip, "brightness", {"value": max(1, round(status.get("brightness", 100) *
-                                                                            (1 - step / steps)))})
+                    # Every light that was on and that an app hasn't taken
+                    for ip in lit & allowed:
+                        level = max(1, round(start[ip].get("brightness", 100) * (1 - step / steps)))
+                        self.send(ip, "brightness", {"value": level})
+                        self.remember_sent(ip, None, level)
                     time.sleep(2)
-                self.power(False)
+                    allowed = self.check_lights(every_light - self.released)
+                self.power(False, every_light - self.released)
         finally:
-            self.hand_back(set(self.devices))
+            self.hand_back(every_light)
             self.busy.release()
 
 # The saved moods, newest last: dicts with name, colors, effect, speed, brightness and saved
