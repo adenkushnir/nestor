@@ -37,6 +37,10 @@ MAX_RECORD_SECONDS = 15
 LOOKING_SECONDS = 15  # After showing a look on the lights, how long John waits for what you think of it
 SPEAKER_QUIET_TIMEOUT = 120  # The longest John waits for the speaker to finish before listening for a follow-up
 STOP_WORDS = {"stop", "cancel", "never mind", "nevermind", "nothing", "that's all", "thanks", "thank you"}
+# Stray words speech-to-text hears on their own (often right after "Hey John"), which say nothing by themselves
+FILLER_WORDS = {"the", "a", "an", "uh", "um", "er", "erm", "ah", "oh", "hmm", "huh", "mm", "and", "so", "they", "then",
+                "it", "i", "you", "to", "of", "but", "well", "hey"}
+MAX_MISSES = 2  # How many times in a row John says "Didn't catch that" before he stops listening
 LEAD_IN_FRAMES = 6  # Audio kept from just before speech is noticed in a ringing gap, so a short "stop" isn't clipped
 RING_COMMAND_SECONDS = 2.5  # How long a command in a ringing gap can take
 NUMBER_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9,
@@ -44,7 +48,7 @@ NUMBER_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, 
                 "forty-five": 45, "forty five": 45, "fifty": 50, "sixty": 60}
 ANSWER_TIMEOUT_SECONDS = 180
 THINKING_AFTER_SECONDS = 2.5  # Say a thinking line ("One sec chief.") if Claude takes longer than this
-CLIP_TIMEOUT_SECONDS = 8  # The longest John waits for his start word to finish before listening anyway
+CLIP_TIMEOUT_SECONDS = 8  # The longest John waits for a clip ("Yes boss?") to finish before listening anyway
 WAKE_PHRASE = re.compile(r"\b(hey|hi|okay|ok),?\s+(john|jon|jarvis)\b[,.!?]*", re.IGNORECASE)
 # "Hey John" at the start of a phrase, with at most one word before it (like "um")
 WAKE_START = re.compile(r"^\W*(?:\w+\W+)?(hey|hi|okay|ok)\W+(john|jon)\b\W*", re.IGNORECASE)
@@ -66,6 +70,10 @@ log = logging.getLogger(__name__)
 # What was said without the wake phrase, which sometimes ends up in the recording ("What time is it? Hey John")
 def without_wake_phrase(heard):
     return " ".join(WAKE_PHRASE.sub(" ", heard).split()).strip(" ,")
+
+# True if the words say something: at least one word that isn't a stray filler like "the" or "um"
+def says_something(heard):
+    return any(word not in FILLER_WORDS for word in re.findall(r"[\w']+", (heard or "").lower()))
 
 # If John was called, what was asked ("" if nothing more was said); None if he wasn't. He's called by "Hey John" at
 # the start (allowing one word before it, like "um"), by a short request ending in ", John", or by "good morning John"
@@ -169,7 +177,7 @@ class John:
             self.plain = not self.speech_to_text.punctuates
             rail = RailData(self.secrets.get("NJT_USERNAME"), self.secrets.get("NJT_PASSWORD"))
             self.brain = Brain(self.announcer, self.settings, self.secrets["ANTHROPIC_API_KEY"], rail)
-            clips.prepare(self.announcer)  # His start words and thinking lines, made ahead of time
+            clips.prepare(self.announcer)  # His start words, thinking lines and "Didn't catch that", made ahead of time
         except Exception as error:
             log.error("Hey John couldn't start: %s", error)
             return
@@ -238,6 +246,12 @@ class John:
         elif rest:
             heard = self.transcribe(samples)
             self.first_words = after_wake_words(heard, self.plain) or without_wake_phrase(rest) or None
+
+        # A stray word after "Hey John" ("the") isn't a question: he says his word and listens instead
+        if self.first_words and not says_something(self.first_words):
+            log.info("Heard \"Hey John\" (left out the stray %r)", self.first_words)
+            self.first_words = None
+            return True
         log.info("Heard \"Hey John\"%s", f" and: {self.first_words!r}" if self.first_words else "")
         return True
 
@@ -280,24 +294,28 @@ class John:
         heard = first_words
         wait_seconds = FIRST_WAIT_SECONDS
         first_round = True
+        asked_again = False  # True right after "Didn't catch that", which is its own cue to talk
+        misses = 0
 
         # Asked in one breath: a "got it" tone and straight to the answer; otherwise he says his word ("Yes boss?")
         if heard:
             self.recorder.stop()
             play_sound(self.announcer, "done")
         else:
-            self.say_start_word()
+            self.say_clip("start")
 
         # Each round is one thing said and John's answer
         while True:
+            listening_fresh = first_round or asked_again
+
             # A follow-up: a soft tone says he's still listening, and the glow dims as the time runs out
-            if not first_round:
+            if not listening_fresh:
                 play_sound(self.announcer, "followup")
                 self.dim_glow(wait_seconds)
-            wall_live.set_john("listening" if first_round else "followup", 0 if first_round else wait_seconds)
+            wall_live.set_john("listening" if listening_fresh else "followup", 0 if listening_fresh else wait_seconds)
             heard = heard or self.listen(wait_seconds)
             self.dim_glow(0)
-            first_round = False
+            first_round = asked_again = False
 
             # Nobody spoke, or he was told to stop: the conversation is over
             if heard is None or self.cancelled.is_set():
@@ -305,17 +323,30 @@ class John:
             words = heard.lower().strip(" .!?,")
             ringing = timers.scheduler and timers.scheduler.ringing
 
-            # Snooze or stop what's ringing, end on "never mind", or run good morning / goodnight, without asking Claude
+            # Snooze or stop what's ringing, end on "never mind", ask again when too little was heard, or run good
+            # morning / goodnight, without asking Claude
             if ringing and self.handle_ring_words(words):
                 return
-            elif not heard or words in STOP_WORDS:
+            elif words in STOP_WORDS:
                 return
+            elif not says_something(words):
+                misses += 1
+
+                # After two misses in a row he stops listening rather than ask forever
+                if misses > MAX_MISSES:
+                    return
+                self.say_clip("missed")
+                heard = None
+                wait_seconds = FIRST_WAIT_SECONDS
+                asked_again = True
+                continue
             elif routine_for(heard) == "start_my_day":
                 routines.start_my_day(self.announcer, self.settings)
                 return
             elif routine_for(heard) == "goodnight":
                 routines.goodnight(self.announcer, self.settings)
                 return
+            misses = 0
             wall_live.set_john("thinking")
             answer = self.answer(heard)
 
@@ -341,16 +372,17 @@ class John:
             if spotify.music_playing():
                 return
 
-    # Say his word for being called ("Yes boss?", "Go on.", a different one each time), with the microphone off so he
-    # doesn't hear himself, then listen; the listening tone instead if the word can't be made
-    def say_start_word(self):
+    # Say a clip that asks you to talk, a different one each time: his word for being called ("Yes boss?") for "start",
+    # or "Didn't catch that boss." for "missed". The microphone is off so he doesn't hear himself, then it listens;
+    # the listening tone plays instead if the clip can't be made.
+    def say_clip(self, kind):
         self.recorder.stop()
 
         # The speech service may be unreachable for a moment
         try:
-            clips.play_clip(self.announcer, "start").wait(CLIP_TIMEOUT_SECONDS)
+            clips.play_clip(self.announcer, kind).wait(CLIP_TIMEOUT_SECONDS)
         except Exception as error:
-            log.warning("Couldn't say John's start word: %s", error)
+            log.warning("Couldn't say John's %s clip: %s", kind, error)
             play_sound(self.announcer, "listening")
         self.recorder.start()
 
@@ -424,8 +456,8 @@ class John:
             samples = self.record(max(0.5, ends - time.time()))
             heard = without_wake_phrase(self.transcribe(samples)) if samples else ""
 
-            # Words heard, nobody spoke, or out of time: stop listening
-            if heard or not samples or time.time() >= ends:
+            # Words heard (more than a stray "the"), nobody spoke, or out of time: stop listening
+            if says_something(heard) or not samples or time.time() >= ends:
                 self.recorder.stop()
                 play_sound(self.announcer, "done")
                 log.info("Heard: %r", heard)

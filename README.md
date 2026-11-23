@@ -207,6 +207,7 @@ and then calls you sir, boss or chief. After an answer, he listens for about 5 s
 "Hey John". Say "stop" or "never mind" to end. You'll hear:
 - a short word in his own voice when he's listening ("Yes boss?", "Go on.", a different one each time);
 - a falling tone when he's got it;
+- "Didn't catch that boss." (or similar) if he heard too little, like a stray "the"; then he listens again;
 - a short line while a longer answer is on its way ("One sec chief.", "Let me look into that.");
 - one soft note after an answer: he's still listening for a follow-up, and the wall's glow and the light strip dim as
   that time runs out;
