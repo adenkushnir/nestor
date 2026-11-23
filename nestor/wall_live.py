@@ -11,6 +11,7 @@ ALARM_AHEAD_HOURS = 24  # The night clock shows the first alarm within this many
 changed = threading.Condition()
 version = 0
 john_state = "idle"
+john_window = 0  # How long the follow-up John is in listens for (0 when he isn't)
 big_request = None  # The last bigger screen asked for: {"view": "week", "id": 3} (the id tells a new ask from an old)
 
 # Tell everyone watching the feed that something changed
@@ -22,13 +23,15 @@ def poke():
         version += 1
         changed.notify_all()
 
-# Set John's state ("idle", "listening", "thinking", "talking" or "followup")
-def set_john(state):
-    global john_state
+# Set John's state ("idle", "listening", "thinking", "talking" or "followup"); window is how many seconds a follow-up
+# listens, so the wall's glow can dim over it
+def set_john(state, window=0):
+    global john_state, john_window
 
     # Only a real change is sent on
-    if state in JOHN_STATES and state != john_state:
+    if state in JOHN_STATES and (state, window) != (john_state, john_window):
         john_state = state
+        john_window = window if state == "followup" else 0
         poke()
 
 # Open a bigger screen on the wall ("week", "weather" or "fencing"), or close it ("close"); returns what was asked
@@ -91,7 +94,7 @@ def live_state(announcer, now=None):
         elif not first_alarm and rings - now <= datetime.timedelta(hours=ALARM_AHEAD_HOURS):
             first_alarm = f"{rings.hour % 12 or 12}:{rings.minute:02d} {'AM' if rings.hour < 12 else 'PM'}"
     ringing = data["ringing"]
-    return {"john": john_state, "ringing": ring_card(ringing, now) if ringing else None,
+    return {"john": john_state, "john_window": john_window, "ringing": ring_card(ringing, now) if ringing else None,
             "sleeping": bool(announcer.quiet_hours.is_quiet()), "alarm": first_alarm, "timers": chips,
             "big": big_request}
 # The feed hears about every change to the timers and the ringing

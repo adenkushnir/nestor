@@ -202,11 +202,14 @@ John is Nestor's voice assistant. Call him in any of these ways, and he answers 
 - "When's the next train?" or "Next train back from New York?" (live NJ Transit)
 - Anything else, with web search: "Who won the game last night?"
 
-After an answer, John listens for about 5 seconds for a follow-up without "Hey John". Say "stop" or "never mind" to
-end. You'll hear these sounds:
-- a rising tone when he's listening;
+John is warm and a little film-noir, keeps his answers to a sentence or two, only answers what you asked, and now
+and then calls you sir, boss or chief. After an answer, he listens for about 5 seconds for a follow-up without
+"Hey John". Say "stop" or "never mind" to end. You'll hear:
+- a short word in his own voice when he's listening ("Yes boss?", "Go on.", a different one each time);
 - a falling tone when he's got it;
-- soft taps while Claude is thinking;
+- a short line while a longer answer is on its way ("One sec chief.", "Let me look into that.");
+- one soft note after an answer: he's still listening for a follow-up, and the wall's glow and the light strip dim as
+  that time runs out;
 - a low tone if something went wrong.
 
 For music, see [Spotify](#spotify); for lights, see [Govee lights](#govee-lights).

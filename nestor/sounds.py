@@ -12,6 +12,7 @@ SOUNDS = {
     "done": ([(987.8, 0.11), (659.3, 0.24)], 0.9),  # Falling: "got it" / stopped listening
     "thinking": ([(784.0, 0.16), (784.0, 0.16), (784.0, 0.22)], 0.45),  # Three soft taps while Claude works
     "error": ([(392.0, 0.18), (311.1, 0.34)], 1.0),  # Two low notes: something went wrong
+    "followup": ([(880.0, 0.22)], 0.35),  # One soft note after an answer: "still listening, go ahead"
     "alarm": ([(1046.5, 0.13), (0.0, 0.07), (1046.5, 0.13), (0.0, 0.07), (1046.5, 0.13), (0.0, 0.35)] * 2, 1.2),
 }
 

@@ -7,6 +7,8 @@ speaker_host: ""
 voice: "en-US-EmmaMultilingualNeural"
 # Speaking speed, e.g. "+10%" or "-5%"
 voice_rate: "+0%"
+# Voice pitch, e.g. "-4Hz" for a lower voice (John's noir delivery: en-GB-ThomasNeural, "-6%", "-4Hz")
+voice_pitch: "+0Hz"
 # Play a short chime before each announcement
 chime: true
 # Port of Nestor's web server (the speaker fetches its audio from here)

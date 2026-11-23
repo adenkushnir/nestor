@@ -81,7 +81,7 @@ const GLINTS = [[372, 300], [405, 293], [440, 288], [465, 286], [242, 321], [318
 const STARS = Array.from({length: 26}, (_, index) => [130 + (index * 137) % 330, 12 + (index * 71) % 180, index * 0.7]);
 // What the rest of the page tells the scene: the weather, the sun, John, a ring, the night clock, the lite look
 const wall = {weather: "partly", sunrise: 405, sunset: 1050, john: "idle", ringing: false, night: false,
-  sleeping: false, bigOpen: false, lite: false};
+  sleeping: false, bigOpen: false, lite: false, johnWindow: 0, followupSince: 0};
 // John's edge glow: violet while he listens, talks and waits for a follow-up, amber while he thinks; bold, on all four
 // edges, steady (Aden's pick on the real screen: the aqua was hard to see)
 const GLOW_COLOURS = {listening: "190, 70, 255", thinking: "255, 190, 106", talking: "190, 70, 255",
@@ -380,9 +380,9 @@ function eyeGlow() {
     return {colour: "190, 70, 255", strength: 0.9};
   }
 
-  // Listening: bright violet; thinking: amber; dozing: off; otherwise a soft violet
+  // Listening: bright violet (dimming through a follow-up); thinking: amber; dozing: off; otherwise a soft violet
   if (hare.pose.includes("listening")) {
-    return {colour: "210, 120, 255", strength: 1};
+    return {colour: "210, 120, 255", strength: followupShare()};
   } else if (hare.pose.includes("thinking")) {
     return {colour: "255, 190, 106", strength: 0.9};
   } else if (hare.pose.startsWith("dozing")) {
@@ -753,10 +753,22 @@ function glowSide(pen, side, colour, strength) {
   }
 }
 
-// John's edge glow: steady violet while he listens, talks and waits for a follow-up, amber while he thinks; half as
-// strong in the sleeping period. It's drawn only when that changes.
+// How strong John's glow is in a follow-up: it dims from full to faint as the window runs out, in small steps so it's
+// redrawn only now and then (1 the rest of the time)
+function followupShare() {
+  // Only while he waits for a follow-up with a known window
+  if (wall.john !== "followup" || !wall.johnWindow) {
+    return 1;
+  }
+  const share = (performance.now() - wall.followupSince) / (wall.johnWindow * 1000);
+  return Math.max(0.15, Math.round((1 - share) * 20) / 20);
+}
+
+// John's edge glow: steady violet while he listens, talks and waits for a follow-up (dimming as its time runs out),
+// amber while he thinks; half as strong in the sleeping period. It's drawn only when that changes.
 function drawGlow() {
-  const shown = `${wall.john}|${wall.sleeping}`;
+  const share = followupShare();
+  const shown = `${wall.john}|${wall.sleeping}|${share}`;
 
   // Nothing while John is idle; nothing new while it's the same
   if (wall.john === "idle") {
@@ -773,7 +785,7 @@ function drawGlow() {
 
   // Every edge glows the same
   for (const side of EDGES) {
-    glowSide(pen, side, GLOW_COLOURS[wall.john] || GLOW_COLOURS.listening, wall.sleeping ? 0.5 : 1);
+    glowSide(pen, side, GLOW_COLOURS[wall.john] || GLOW_COLOURS.listening, (wall.sleeping ? 0.5 : 1) * share);
   }
 }
 
