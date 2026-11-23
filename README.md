@@ -258,6 +258,7 @@ looks up for the answer.
    ANTHROPIC_API_KEY=sk-ant-...
    NJT_USERNAME=your NJ Transit developer username (for trains)
    NJT_PASSWORD=its password
+   OPENAI_API_KEY=sk-... (optional: only for speech_to_text "openai" on the board, see board/README.md)
    ```
 
 3. Nothing to train: John listens for the words. (If you ever train an openWakeWord model for "Hey John", save it

@@ -172,9 +172,9 @@ class John:
             self.recorder = open_microphone(self.settings.get("microphone", ""))
             log.info("Loading speech-to-text (%s); the first time may download it",
                      self.settings.get("speech_to_text", "whisper"))
-            self.speech_to_text = load_speech_to_text(self.settings)
+            self.speech_to_text = load_speech_to_text(self.settings, self.secrets)
             self.wake_speech_to_text = None if model else load_wake_speech_to_text(self.settings, self.speech_to_text)
-            self.plain = not self.speech_to_text.punctuates
+            self.plain = not (self.wake_speech_to_text or self.speech_to_text).punctuates  # For the "Hey John" check
             rail = RailData(self.secrets.get("NJT_USERNAME"), self.secrets.get("NJT_PASSWORD"))
             self.brain = Brain(self.announcer, self.settings, self.secrets["ANTHROPIC_API_KEY"], rail)
             clips.prepare(self.announcer)  # His start words, thinking lines and "Didn't catch that", made ahead of time
@@ -240,12 +240,15 @@ class John:
         if rest is None:
             return False
 
-        # More was said in the same breath: hear it properly with the bigger model (Vosk already used its only one)
-        if rest and self.wake_speech_to_text is self.speech_to_text:
+        # More was said in the same breath: hear it properly with the main speech-to-text (unless that's the same one,
+        # or it was only a stray word like "the")
+        if rest and (self.wake_speech_to_text is self.speech_to_text or not says_something(rest)):
             self.first_words = rest
         elif rest:
             heard = self.transcribe(samples)
-            self.first_words = after_wake_words(heard, self.plain) or without_wake_phrase(rest) or None
+            plain = not self.speech_to_text.punctuates
+            found = after_wake_words(heard, plain) or without_wake_phrase(heard)
+            self.first_words = found or without_wake_phrase(rest) or None
 
         # A stray word after "Hey John" ("the") isn't a question: he says his word and listens instead
         if self.first_words and not says_something(self.first_words):

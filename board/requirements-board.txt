@@ -4,5 +4,7 @@ pychromecast>=14.1
 edge-tts>=7.3
 anthropic>=2.10
 vosk>=0.3.45
+# For speech_to_text: "openai" (John hears what you ask in the cloud)
+openai>=3.58
 # Debian's httpcore is too old for the h11 that anthropic brings in
 httpcore>=1.0.9

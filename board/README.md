@@ -102,6 +102,11 @@ speak on one core (about 60 °C). Vosk writes no punctuation, so John also wakes
 ("turn the wall blue john"), not only on "Hey John". The microphone is read with Linux's `arecord`, as pvrecorder
 doesn't support the board's processor.
 
+Vosk's small model mishears a lot of questions ("what time is up"), so **John can hear what you ask in the cloud**.
+With `speech_to_text: "openai"` and `OPENAI_API_KEY=sk-...` in `.env`, Vosk on the board still listens for "Hey
+John", and only what's said after it goes to OpenAI's `gpt-transcribe` (about $0.0045 a minute, so cents a month).
+If OpenAI can't be reached within 8 seconds, Vosk hears it instead.
+
 1. **Install** (as root on the board; replace `aden` with your account):
 
    ```bash
@@ -121,7 +126,7 @@ doesn't support the board's processor.
 3. **The board's settings** in `~/nestor/config.yaml`:
 
    ```yaml
-   speech_to_text: "vosk"
+   speech_to_text: "vosk" # or "openai" with OPENAI_API_KEY in .env (see above)
    microphone: "USB"      # part of the microphone's name (arecord -l lists them)
    trial: false           # true while the PC's Nestor still runs (see below)
    ```
