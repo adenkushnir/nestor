@@ -10,6 +10,7 @@ from nestor.discovery import Advertiser
 from nestor.event_alerts import EventAlerts
 from nestor.github_watch import GitHubWatcher
 from nestor.govee import GoveeLights
+from nestor.heat_watch import HeatWatcher
 from nestor.reminders import ReminderScheduler
 from nestor.timers import TimerScheduler
 from nestor.server import create_app
@@ -76,6 +77,10 @@ class Service:
         # GitHub alerts can be turned off in config.yaml
         if scheduled and settings.get("github_watch", True):
             GitHubWatcher(self.announcer, settings)
+
+        # The board's temperature is watched in the full service (on a PC there's none, and the watcher stops)
+        if watchers:
+            HeatWatcher(self.announcer, settings)
 
         # Hey John runs in the full service; he loads in the background, as his libraries take a while
         if watchers and settings.get("john", True):

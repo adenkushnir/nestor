@@ -16,6 +16,8 @@ port: 8765
 # Alerts (tell.py, the Claude Code hook, GitHub) that arrive in these hours are held until they end. Empty = never.
 # Messages from speak.py always play straight away.
 quiet_hours: "22:00-08:00"
+# On a board: from this chip temperature (°C) Nestor says once that it's running hot (it switches off at 90)
+heat_warning: 85
 # Announce GitHub news on your repos: CI failures and recoveries, new stars, issues and PRs from others
 github_watch: true
 github_poll_minutes: 5

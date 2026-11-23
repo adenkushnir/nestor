@@ -175,4 +175,6 @@ said twice), while John and direct commands work. Set `john: false` on the PC me
 - Kernel updates are held. To update, rebuild the kernel on the new Armbian branch the same way and install it.
 - **Heat:** with only its heatsink (no fan), the board reaches its 90 °C cut-off within a minute or two of all four
   cores working flat out, and switches itself off (screen and lights go dark). Nestor with Vosk and the screen page
-  stays around 58 °C.
+  stays around 58 °C out of the case; inside the SmartiPi case it sits at 70-75 °C and reached 83 °C while Vosk
+  heard long conversations. Nestor notes the temperature in its log every 10 minutes, the wall switches to its lite
+  look from 80 °C, and from 85 °C (`heat_warning` in config.yaml) Nestor says once that the board is running hot.
