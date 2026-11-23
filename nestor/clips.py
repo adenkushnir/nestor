@@ -14,6 +14,8 @@ CLIPS = {
               "Go ahead boss.", "Let's hear it."],
     "thinking": ["One sec chief.", "Let me look into that.", "Give me a moment.", "Hang on sir.", "Checking.",
                  "Bear with me boss.", "Let me dig into it."],
+    "missed": ["Didn't catch that boss.", "Say again chief?", "Come again?", "One more time sir?",
+               "Didn't quite get that."],
 }
 MP3_BYTES_PER_SECOND = 6000  # Edge voices come as 48 kbit/s mp3
 LENGTHS_PATH =os.path.join(CACHE_DIR, "clip-lengths.json")  # Clip file name: seconds until its last word ends
@@ -53,8 +55,8 @@ def prepare(announcer):
                     log.warning("Couldn't make John's clip %r: %s", text, error)
     threading.Thread(target=make_all, name="john-clips", daemon=True).start()
 
-# Play a clip of this kind ("start" or "thinking"), never the same one twice in a row; returns the event set once it
-# has played
+# Play a clip of this kind ("start", "thinking" or "missed"), never the same one twice in a row; returns the event set
+# once it has played
 def play_clip(announcer, kind):
     choices = [text for text in CLIPS[kind] if text != last_played.get(kind)]
     text = random.choice(choices)

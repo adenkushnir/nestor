@@ -47,8 +47,12 @@ microphone: ""
 # How sure the speech detector must be that a sound is a voice, 0.0 to 1.0 (lower hears quieter speech;
 # python -m nestor --mic-test shows its scores)
 john_speech_threshold: 0.4
-# Speech-to-text: "whisper" on a PC, "vosk" on the Tinker Board (Whisper is too slow there)
+# Speech-to-text: "whisper" on a PC, "vosk" on the Tinker Board (Whisper is too slow there), or "openai" on the board
+# for much better hearing: what's said after "Hey John" goes to OpenAI (about $0.0045 a minute, needs OPENAI_API_KEY in
+# .env); "Hey John" itself is still heard on the board with Vosk, which also hears everything if OpenAI can't be reached
 speech_to_text: "whisper"
+# OpenAI's speech-to-text model, for speech_to_text: "openai"
+openai_speech_model: "gpt-transcribe"
 # Whisper's model: "base.en" is faster, "small.en" is more accurate (downloaded the first time)
 whisper_model: "small.en"
 # Vosk's model folder in the project folder (downloaded by hand, see board/README.md)
