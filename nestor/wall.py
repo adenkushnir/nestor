@@ -82,16 +82,26 @@ def next_event(events, now):
                 and read_moment(event["start"]) > now and read_moment(event["start"]).date() == now.date()]
     return min(upcoming, key=lambda event: event["start"]) if upcoming else None
 
-# The status line under the Next card: the event's train from the live board, or its flight from Datebook (None when
-# there's neither)
-def travel_status(event, board_rows):
+# The status lines under the Next card: a flight's status from Datebook, then the event's train from the live board
+# (a flight going by train shows both; empty when there's neither)
+def travel_statuses(event, board_rows):
     flight = event.get("flight") or {}
+    lines = []
+    # A flight carries its own status line
+    if flight.get("text"):
+        lines.append({"kind": "flight", "text": flight["text"], "late": bool(flight.get("late"))})
+    train = train_status(event, board_rows)
+    # The train goes under it
+    if train:
+        lines.append(train)
+    return lines
+
+# The event's train line, looked up on the live board by its departure time (None without a train)
+def train_status(event, board_rows):
     train = event.get("train") or {}
 
-    # A flight carries its own status; a train is looked up on the board by its departure time
-    if flight.get("text"):
-        return {"kind": "flight", "text": flight["text"], "late": bool(flight.get("late"))}
-    elif not train.get("departs"):
+    # No train picked for it
+    if not train.get("departs"):
         return None
     hour, minute = (int(part) for part in train["departs"].split(":"))
     name = f"{hour % 12 or 12}:{minute:02d} train"
@@ -112,7 +122,7 @@ def travel_status(event, board_rows):
     return {"kind": "train", "text": f"{name} · {row['track']} · on time", "late": False}
 
 # The Next card for an event: big time, countdown, place, leave-by (orange once it's time to go), what to bring and
-# the train or flight line
+# the flight and train lines
 def next_card(event, now, board_rows):
     start = read_moment(event["start"])
     leave_by = read_moment(event.get("leave_by"))
@@ -128,7 +138,7 @@ def next_card(event, now, board_rows):
         leave = f"Leave by {clock_parts(leave_by)[0]}" + (f" · {travel}" if travel else "")
     return {"time": time, "ampm": ampm, "soon": "time to go" if urgent else countdown(now, start), "urgent": urgent,
             "title": event.get("title") or "", "place": event.get("place") or "", "leave": leave,
-            "bring": event.get("bring") or "", "status": travel_status(event, board_rows)}
+            "bring": event.get("bring") or "", "statuses": travel_statuses(event, board_rows)}
 
 # Later today: what's left of today after the next event, in time order (timed events, all-day events, reminders, and
 # bills and assignments due today)

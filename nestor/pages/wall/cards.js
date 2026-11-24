@@ -58,9 +58,9 @@ function weatherLine() {
 // The Next card: the start time big on the left with the countdown, the details on the right; orange when it's time
 // to go
 function nextCard(next) {
-  const late = next.status && next.status.late ? " late" : "";
-  const status = next.status ? `<div class="nstatus${late}">${statusIcon(next.status.kind)}` +
-    `<span>${esc(next.status.text)}</span></div>` : "";
+  // One line per status: a flight's, then its train's
+  const status = (next.statuses || []).map((line) => `<div class="nstatus${line.late ? " late" : ""}">` +
+    `${statusIcon(line.kind)}<span>${esc(line.text)}</span></div>`).join("");
   const place = next.place ? `<div>${esc(next.place)}</div>` : "";
   const leave = next.leave ? `<div class="nleave">${esc(next.leave)}</div>` : "";
   const bring = next.bring ? `<div>Bring: ${esc(next.bring)}</div>` : "";
