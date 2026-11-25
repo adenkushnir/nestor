@@ -7,6 +7,7 @@ import threading
 from nestor import timers
 JOHN_STATES = ("idle", "listening", "thinking", "talking", "followup")
 WALL_VIEWS = ("week", "weather", "fencing", "trip", "lists", "trains", "playing", "close")
+SHOWN_VIEWS = WALL_VIEWS + ("journey",)  # also John's journey preview, which comes with its own data
 ALARM_AHEAD_HOURS = 24  # The night clock shows the first alarm within this many hours
 changed = threading.Condition()
 version = 0
@@ -34,14 +35,19 @@ def set_john(state, window=0):
         john_window = window if state == "followup" else 0
         poke()
 
-# Open a bigger screen on the wall (one of WALL_VIEWS), or close it ("close"); returns what was asked
-def show(view):
+# Open a bigger screen on the wall (one of WALL_VIEWS, or "journey" with its data), or close it ("close"); returns
+# what was asked
+def show(view, data=None):
     global big_request
 
     # Only the wall's screens
-    if view not in WALL_VIEWS:
+    if view not in SHOWN_VIEWS:
         raise ValueError(f"the wall has no {view!r} screen; use one of {', '.join(WALL_VIEWS)}")
     big_request = {"view": view, "id": (big_request or {}).get("id", 0) + 1}
+
+    # A journey brings what it shows, so the wall doesn't wait for its next update
+    if data is not None:
+        big_request["data"] = data
     poke()
     return big_request
 

@@ -259,6 +259,7 @@ looks up for the answer.
    NJT_USERNAME=your NJ Transit developer username (for trains)
    NJT_PASSWORD=its password
    OPENAI_API_KEY=sk-... (optional: only for speech_to_text "openai" on the board, see board/README.md)
+   GOOGLE_MAPS_KEY=... (optional: for John's journeys; a Google Cloud key with Routes API and Places API (New))
    ```
 
 3. Nothing to train: John listens for the words. (If you ever train an openWakeWord model for "Hey John", save it
@@ -395,8 +396,15 @@ The Tinker Board's 7-inch screen shows Nestor's page at `/screen`, full-screen i
   touch shows the full wall for 30 seconds.
 - **John:** while you talk to him, all four edges glow and the hare's eyes match: aqua while he listens, talks and waits
   for a follow-up, amber while he thinks.
-- **Bigger screens:** your week, the weather in words for the next 12 hours, and men's foil this week. Tap Later today,
-  the weather line or the men's foil card, or ask John ("show me my week on the wall"); they close after 30 seconds.
+- **Bigger screens:** your week, the weather in words for the next 12 hours, men's foil this week, your trip to the
+  next plan, your lists (bills, assignments, trips, packages), the trains both ways and what's playing. Tap Later today
+  (then "Lists ›" to flip to your lists), the weather line, the Next card, the Trains, music or men's foil card, or
+  ask John ("show me my week on the wall"); they close after 30 seconds. The trip opens by itself at leave time.
+- **Journeys:** ask John "show me the journey to Menlo Park Mall by bus", "how would I get to Hoboken by 7?" or "drive
+  to New Brunswick station, then the train to Newark Airport": the wall shows every step (walks, each train or bus with
+  its stops and times, transfers) and John says it in a line. Ask follow-ups ("what if I leave at 3?"), and "make it a
+  plan" puts it straight on your calendar through Datebook. Needs `GOOGLE_MAPS_KEY` in `.env`; journeys start from
+  `home_address` in config.yaml (else `home_location`).
 - **When things go wrong:** if Nestor stops answering, the cards stay with their last information, dimmed, with
   "Reconnecting to Nestor…". The wall goes lite by itself (solid glass, only the hare and the weather moving, 15
   frames a second) when the board's chip passes 80 °C or the frames can't keep up, and back when things recover.

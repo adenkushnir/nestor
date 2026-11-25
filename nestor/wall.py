@@ -5,6 +5,7 @@ import datetime
 import logging
 import threading
 from nestor import datebook
+from nestor import journeys
 from nestor import reminders
 from nestor import spotify
 from nestor import trains
@@ -320,8 +321,15 @@ def trip_screen(event, board, now):
     time, ampm = clock_parts(start)
     steps = []
 
+    # Without a picked train, the journey Datebook kept for the plan gives every step (buses and transfers too)
+    if event.get("journey") and not train.get("departs"):
+        steps = [dict(trip_step(clock_text(read_moment(step.get("starts")) or start), step.get("title") or "",
+                                step.get("under") or "", "goal" if step.get("kind") == "arrive" else
+                                step.get("kind") or "walk", warn=step.get("kind") == "arrive"),
+                      line=step.get("line") or "", color=step.get("color") or "") for step in event["journey"]]
+
     # Leaving: now, or at the leave time
-    if leave_by:
+    if leave_by and not steps:
         steps.append(trip_step(clock_text(leave_by), "Leave now" if urgent else "Leave", travel, "walk"))
 
     # The train, live from the board when it's on it, with the earlier ones under it, then where it gets you
@@ -341,7 +349,7 @@ def trip_screen(event, board, now):
             steps.append(trip_step(clock_of(train["arrives"]), train.get("to") or "", "AirTrain to the terminal"
                                    if flight.get("text") else "", "stop"))
 
-    # A flight: at the airport early, then it departs; anything else: it starts
+    # A flight: at the airport early, then it departs; anything else: it starts (unless the kept journey arrives)
     if flight.get("text"):
         departs = read_moment(flight.get("departs")) or start
         lands = read_moment(flight.get("lands"))
@@ -353,7 +361,7 @@ def trip_screen(event, board, now):
                                    f"{early} min before departure", "goal", warn=True))
         steps.append(trip_step(clock_text(departs), f"{flight.get('number') or 'Flight'} departs",
                                f"Lands {clock_text(lands)}{city}" if lands else "", "plane", late=flight.get("late")))
-    else:
+    elif not (event.get("journey") and not train.get("departs")):
         steps.append(trip_step(clock_text(start), event.get("title") or "", event.get("place") or "", "goal"))
     gate = " · ".join(part for part in (f"Terminal {flight['terminal']}" if flight.get("terminal") else "",
                                         f"gate {flight['gate']}" if flight.get("gate") else "") if part)
@@ -568,7 +576,8 @@ class Wall:
                     "trip": trip_screen(event, board, now),
                     "lists": lists_screen(snapshot.get("lists"), now),
                     "trains": trains_screen(board, trip, trip_names, picked, now) if trip[0] and trip[1] and self.rail
-                    else None},
+                    else None,
+                    "journey": journeys.wall_screen(now)},
             "chip_temp": chip_temperature(),
         }
 

@@ -20,7 +20,8 @@ STALE_HOURS = 24  # A snapshot older than this may be out of date (the phone has
 ACTION_MINUTES = 10  # Actions the phone hasn't picked up by then are dropped, so an old tap never pops up later
 MAX_WAIT_SECONDS = 55
 HOME_MINUTES = 5  # The phone counts as home if it called Nestor this recently (its waiting request repeats every ~50 s)
-ACTIONS = ("add", "ignore", "done", "new_plan")
+ACTIONS = ("add", "ignore", "done", "new_plan", "add_journey")
+TEXT_ACTIONS = ("new_plan", "add_journey")  # actions carried by their text (a plan's words, or a journey as JSON)
 SNAPSHOT_PARTS = ("waiting", "lists", "notes", "reminders", "trip", "events", "fencing")
 EVENT_FIELDS = ("id", "title", "start", "end", "all_day", "place", "calendar", "from", "bring", "confirmation",
                 "track_url", "leave_by", "travel")
@@ -155,14 +156,14 @@ def add_action(action, item_id=None, text=None, now=None):
     # Each action needs what it acts on: a plan or follow-up id, or the words of a new plan
     if action not in ACTIONS:
         raise ValueError(f"action must be one of {', '.join(ACTIONS)}")
-    elif action == "new_plan" and not str(text or "").strip():
-        raise ValueError("new_plan needs the plan's text")
-    elif action != "new_plan" and item_id in (None, ""):
+    elif action in TEXT_ACTIONS and not str(text or "").strip():
+        raise ValueError(f"{action} needs its text")
+    elif action not in TEXT_ACTIONS and item_id in (None, ""):
         raise ValueError(f"{action} needs the id of what it acts on")
     queued = {"id": secrets.token_hex(6), "action": action, "time": now.isoformat(timespec="seconds")}
 
     # Keep only what the action needs
-    if action == "new_plan":
+    if action in TEXT_ACTIONS:
         queued["text"] = str(text).strip()[:1000]
     else:
         queued["item"] = item_id

@@ -13,9 +13,11 @@ let wokeUntil = 0;
 let toastUntil = 0;
 const BIG_SECONDS = 30;  // A bigger screen closes by itself after this long
 const BIG_TITLES = {days: "Your week", weather: "Weather · next 12 hours", fencing: "Men's foil this week",
-  trip: "Your trip", lists: "Lists", trains: "Trains", playing: "Now playing"};
+  trip: "Your trip", lists: "Lists", trains: "Trains", playing: "Now playing", journey: "Planned by John"};
 const BIG_VIEWS = {week: "days", weather: "weather", fencing: "fencing", trip: "trip", lists: "lists",
-  trains: "trains", playing: "playing"};  // John's names for the screens
+  trains: "trains", playing: "playing", journey: "journey"};  // John's names for the screens
+const JOURNEY_SECONDS = 60;  // John's journey stays open longer, and on while he's talking
+const FLIPS = {days: ["lists", "Lists ›"], lists: ["days", "‹ Week"]};  // Your week and Lists switch with one button
 const big = {open: null, closesAt: 0, list: "", train: ""};  // list: the Lists column opened; train: the stops shown
 let autoOpened = "";  // The Next card whose trip screen opened by itself at leave time
 let bigSeen = null;  // The last bigger-screen request from John that was acted on
@@ -383,14 +385,7 @@ function fencingView() {
 // what to bring) and the steps of the trip on the right, the first one lit (orange when it's time to go)
 function tripView() {
   const trip = data.big.trip;
-  const steps = trip.steps.map((step, index) => {
-    const lit = index === 0 ? (trip.urgent ? " go" : " lit") : "";
-    return `<div class="tstep${lit}"><span class="tstime">${esc(step.time)}</span>` +
-      `<span class="tsdot ${esc(step.kind)}"></span><span><div class="tsname${step.warn ? " warn" : ""}">` +
-      `${esc(step.title)}</div>${step.under ? `<div class="tsunder${step.late ? " warn" : ""}">` +
-      `${esc(step.under)}</div>` : ""}${step.earlier ? `<div class="tsearly">${esc(step.earlier)}</div>` : ""}` +
-      "</span></div>";
-  }).join("");
+  const steps = stepRows(trip.steps, trip.urgent);
   const status = trip.status ? `<span class="nstatus${trip.status_late ? " late" : ""}">${esc(trip.status)}</span>` :
     "";
   return `<div class="tripgrid"><div class="gelcard${trip.urgent ? " urgent" : ""} tripcard">` +
@@ -399,6 +394,35 @@ function tripView() {
     `${status}${trip.gate ? `<div>${esc(trip.gate)}</div>` : ""}` +
     `<div class="nleave" style="margin-top:auto">${esc(trip.leave)}</div>` +
     `${trip.bring ? `<div>Bring: ${esc(trip.bring)}</div>` : ""}</div><div class="tsteps">${steps}</div></div>`;
+}
+
+// A trip's steps, the first lit (orange when it's time to go): time, a dot for its kind, the line's chip (trains and
+// buses), what happens, the line under it and earlier trains
+function stepRows(steps, urgent) {
+  return steps.map((step, index) => {
+    const lit = index === 0 ? (urgent ? " go" : " lit") : "";
+    const colour = /^#[0-9a-fA-F]{6}$/.test(step.color || "") ? step.color : "#0e86c4";
+    const chip = step.line && step.kind !== "goal" ? `<span class="tsline" style="background:${colour}">` +
+      `${esc(step.line)}</span>` : "";
+    return `<div class="tstep${lit}"><span class="tstime">${esc(step.time)}</span>` +
+      `<span class="tsdot ${esc(step.kind)}"></span><span><div class="tsname${step.warn ? " warn" : ""}">` +
+      `${chip}${esc(step.title)}</div>${step.under ? `<div class="tsunder${step.late ? " warn" : ""}">` +
+      `${esc(step.under)}</div>` : ""}${step.earlier ? `<div class="tsearly">${esc(step.earlier)}</div>` : ""}` +
+      "</span></div>";
+  }).join("");
+}
+
+// John's journey: what you asked, how long it takes and when you'd be there, his one line, then every step (not
+// saved until you tell him to make it a plan)
+function journeyView() {
+  const journey = data.big.journey;
+  return `<div class="tripgrid"><div class="gelcard tripcard"><span class="label" style="align-self:flex-start">` +
+    `You asked</span><div style="font-size:15px;font-weight:600">${esc(journey.asked)}</div>` +
+    `<div class="tripbig" style="font-size:40px;margin-top:6px">${esc(journey.total)}</div>` +
+    `<div class="nsoon" style="text-align:left">there by ${esc(journey.arrive)}</div>` +
+    `<div class="nleave" style="margin-top:auto">John: ${esc(journey.line)}</div>` +
+    '<div>Say “make it a plan” to save it.</div></div>' +
+    `<div class="tsteps">${stepRows(journey.steps, false)}</div></div>`;
 }
 
 // One row of an opened list: title and the line under it, the value and how far off it is (orange when soon)
@@ -478,7 +502,7 @@ function bigTitle(kind) {
 
 // Return true if there's something to show on a bigger screen
 function bigHasData(kind) {
-  const needs = {trip: data.big.trip, lists: data.big.lists, trains: data.big.trains};
+  const needs = {trip: data.big.trip, lists: data.big.lists, trains: data.big.trains, journey: data.big.journey};
   return !(kind in needs) || Boolean(needs[kind]);
 }
 
@@ -504,7 +528,7 @@ function openBig(kind) {
   big.open = kind;
   big.list = "";
   big.train = "";
-  big.closesAt = Date.now() + BIG_SECONDS * 1000;
+  big.closesAt = Date.now() + (kind === "journey" ? JOURNEY_SECONDS : BIG_SECONDS) * 1000;
   wall.bigOpen = true;
   renderBig();
 }
@@ -527,11 +551,14 @@ function renderBig() {
     return;
   }
   const views = {days: daysView, weather: weatherView, fencing: fencingView, trip: tripView, lists: listsView,
-    trains: trainsView, playing: playingView};
+    trains: trainsView, playing: playingView, journey: journeyView};
+  const flip = FLIPS[big.open] ? `<button class="ghost" type="button" data-flip="${FLIPS[big.open][0]}">` +
+    `${FLIPS[big.open][1]}</button>` : "";
+  const unsaved = big.open === "journey" ? '<span class="label unsaved">Planned by John · not saved</span>' : "";
   const urgent = big.open === "trip" && data.big.trip.urgent ? " urgent" : "";
   holder.innerHTML = `<div class="bigcard glass${urgent}"><div class="bighead"><span class="bigtitle">` +
-    `${bigTitle(big.open)}` +
-    '</span><span class="grow"></span><span class="bigclose" id="bigCountdown"></span>' +
+    `${bigTitle(big.open)}</span>${unsaved}${flip}<span class="grow"></span>` +
+    '<span class="bigclose" id="bigCountdown"></span>' +
     '<button class="ghost" type="button" data-big="close">Close</button></div>' +
     `<div class="bigbody">${views[big.open]()}</div></div>`;
   drawBig();
@@ -542,6 +569,10 @@ function drawBig() {
   // Only while a screen is open
   if (!big.open) {
     return;
+  }
+  // John's journey stays while he's talking about it
+  if (big.open === "journey" && live.john !== "idle") {
+    big.closesAt = Math.max(big.closesAt, Date.now() + BIG_SECONDS * 1000);
   }
   const left = Math.ceil((big.closesAt - Date.now()) / 1000);
 
@@ -579,6 +610,7 @@ function onTap(event) {
   const open = event.target.closest("[data-open]");
   const list = event.target.closest("[data-list]");
   const stops = event.target.closest("[data-stops]");
+  const flip = event.target.closest("[data-flip]");
 
   // While John is busy any tap stops him; otherwise a ring button, Close, a card that opens its screen, or the night
   // clock
@@ -588,6 +620,8 @@ function onTap(event) {
     ringButton(button.dataset.ring);
   } else if (close) {
     closeBig();
+  } else if (big.open && flip) {
+    openBig(flip.dataset.flip);
   } else if (big.open && (list || stops)) {
     big.list = list ? list.dataset.list : big.list;
     big.train = stops ? stops.dataset.stops : big.train;
@@ -635,9 +669,12 @@ function followLive() {
     } else if (request && request.id !== bigSeen) {
       bigSeen = request.id;
 
-      // Close, or open the screen asked for
+      // Close, open John's journey with what it brought, or open the screen asked for
       if (request.view === "close") {
         closeBig();
+      } else if (request.view === "journey" && request.data && data) {
+        data.big.journey = request.data;
+        openBig("journey");
       } else {
         openBig(BIG_VIEWS[request.view]);
       }

@@ -6,6 +6,7 @@ import json
 import logging
 from nestor import datebook
 from nestor import govee
+from nestor import journeys
 from nestor import memory
 from nestor import reminders
 from nestor import routines
@@ -142,6 +143,28 @@ def tool_definitions():
              "assignments, trips and packages), the trains both ways, or what's playing; close closes it. It closes "
              "by itself after 30 seconds. Use it when asked to show something on the wall or screen.",
              {"view": {"type": "string", "enum": list(wall_live.WALL_VIEWS)}}),
+        tool("plan_journey", "Plan how the user would get somewhere, step by step (walks, each train or bus with its "
+             "stops and times, transfers, or a drive), and show it on the wall. Use it for 'show me the journey to X', "
+             "'how would I get to X by bus', 'help me plan a trip to X using ...', and to re-plan for follow-ups "
+             "('what if I leave at 3', 'by train instead'). Answer with its one-line summary, then offer to make it a "
+             "plan. Nothing is saved.",
+             {"to": {"type": "string", "description": "The place, in the user's words or as an address"},
+              "mode": {"type": "string", "enum": ["transit", "walk", "drive"]},
+              "only": {"type": "string", "enum": ["", "train", "bus"],
+                       "description": "For transit: trains only or buses only, when asked; empty for both"},
+              "leave_at": {"type": "string", "description": "HH:MM or YYYY-MM-DDTHH:MM when leaving; empty for now"},
+              "arrive_by": {"type": "string", "description": "HH:MM or YYYY-MM-DDTHH:MM to be there by; empty if not "
+                                                             "said"},
+              "first_by": {"type": "string", "enum": ["", "drive", "walk"],
+                           "description": "For 'drive (or walk) to the station, then the train': how to get to the "
+                                          "station; empty otherwise"},
+              "station": {"type": "string", "description": "The station for first_by, like 'New Brunswick'; empty "
+                                                           "otherwise"},
+              "asked": {"type": "string", "description": "What the user asked, in a few words, for the wall"}}),
+        tool("make_journey_plan", "Make the last journey from plan_journey a plan when the user says yes ('make it a "
+             "plan', 'save it'): it goes straight onto their calendar through Datebook, with its travel mode.",
+             {"title": {"type": "string", "description": "What the plan is, like 'Dinner with Sam'; empty: the "
+                                                         "place's name"}}),
         tool("remember", "Remember a lasting fact about the user when asked, or what lighting they liked for an "
              "activity (e.g. 'likes dim warm drifting light for comedies').", {"fact": TEXT}),
         tool("forget", "Forget remembered facts containing these words, when asked.", {"about": TEXT}),
@@ -258,6 +281,13 @@ class JohnTools:
             return self.lights(name, arguments)
         elif name in ("play_music", "music_control"):
             return self.music(name, arguments)
+        elif name == "plan_journey":
+            return self.plan_journey(arguments)
+        elif name == "make_journey_plan":
+            plan = journeys.as_plan(arguments.get("title", ""))
+            datebook.add_action("add_journey", text=json.dumps(plan))
+            phone = "home" if datebook.phone_home(datetime.datetime.now()) else "not home (it's sent when it's back)"
+            return json.dumps({"sent_to_datebook": plan, "phone": phone})
         elif name == "show_on_wall":
             return json.dumps({"shown": wall_live.show(arguments["view"])})
         elif name == "speak":
@@ -270,6 +300,42 @@ class JohnTools:
             return json.dumps({"forgotten": memory.forget(arguments["about"])})
         else:
             raise ValueError(f"no tool called {name}")
+
+    # Plan a journey from what John was asked, show it on the wall, and return its one-line summary and steps (or why
+    # it couldn't be planned)
+    def plan_journey(self, arguments):
+        now = datetime.datetime.now()
+
+        # A time said as HH:MM (today, or tomorrow once it's past) or in full; None when it's empty or odd
+        def moment(text):
+            text = str(text or "").strip()
+
+            # Empty, a full time, or a clock time
+            try:
+                if not text:
+                    return None
+                elif "T" in text:
+                    return datetime.datetime.fromisoformat(text)
+                hour, minute = (int(part) for part in text.split(":"))
+                at = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                return at if at > now else at + datetime.timedelta(days=1)
+            except ValueError:
+                return None
+
+        # A journey that can't be planned says why instead
+        try:
+            journey = journeys.plan(self.settings, arguments["to"], arguments.get("mode", "transit"),
+                                    arguments.get("only", ""), moment(arguments.get("leave_at")),
+                                    moment(arguments.get("arrive_by")), arguments.get("first_by", ""),
+                                    arguments.get("station", ""), arguments.get("asked", ""))
+        except Exception as error:
+            log.warning("Journey to %r couldn't be planned: %s", arguments.get("to"), error)
+            return json.dumps({"error": str(error)})
+        wall_live.show("journey", journeys.wall_screen(now))
+        return json.dumps({"summary": journeys.summary(journey), "place": journey["name"],
+                           "minutes": journey["minutes"],
+                           "steps": [f"{journeys.clock(step['starts'])} {step['title']} ({step['under']})".rstrip(" ()")
+                                     for step in journey["steps"]]})
 
     # Datebook's copy, cut down to what answers need, with Canvas titles as they should be said (no course codes) and
     # each class's nickname in "class"
