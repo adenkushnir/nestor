@@ -173,9 +173,10 @@ function showToast(message) {
   toastUntil = Date.now() + TOAST_SECONDS * 1000;
 }
 
-// Is the night clock showing: in the sleeping period, unless a touch woke the wall for a while
+// Is the night clock showing: in the sleeping period, unless a touch woke the wall for a while or a bigger screen is
+// open (it comes back once that closes)
 function nightShowing() {
-  return live.sleeping && Date.now() > wokeUntil;
+  return live.sleeping && Date.now() > wokeUntil && !big.open;
 }
 
 // The night clock: black, with the time and the first alarm in dim amber (brighter while something rings, with its
