@@ -12,9 +12,12 @@ let live = {john: "idle", ringing: null, sleeping: false, alarm: null, timers: [
 let wokeUntil = 0;
 let toastUntil = 0;
 const BIG_SECONDS = 30;  // A bigger screen closes by itself after this long
-const BIG_TITLES = {days: "Your week", weather: "Weather · next 12 hours", fencing: "Men's foil this week"};
-const BIG_VIEWS = {week: "days", weather: "weather", fencing: "fencing"};  // John's names for the screens
-const big = {open: null, closesAt: 0};
+const BIG_TITLES = {days: "Your week", weather: "Weather · next 12 hours", fencing: "Men's foil this week",
+  trip: "Your trip", lists: "Lists", trains: "Trains", playing: "Now playing"};
+const BIG_VIEWS = {week: "days", weather: "weather", fencing: "fencing", trip: "trip", lists: "lists",
+  trains: "trains", playing: "playing"};  // John's names for the screens
+const big = {open: null, closesAt: 0, list: "", train: ""};  // list: the Lists column opened; train: the stops shown
+let autoOpened = "";  // The Next card whose trip screen opened by itself at leave time
 let bigSeen = null;  // The last bigger-screen request from John that was acted on
 const OFFLINE_AFTER = 2;  // Updates missed in a row before the wall shows it's reconnecting
 let missed = 0;
@@ -64,7 +67,8 @@ function nextCard(next) {
   const place = next.place ? `<div>${esc(next.place)}</div>` : "";
   const leave = next.leave ? `<div class="nleave">${esc(next.leave)}</div>` : "";
   const bring = next.bring ? `<div>Bring: ${esc(next.bring)}</div>` : "";
-  return `<div class="gelcard${next.urgent ? " urgent" : ""} nextsplit"><div class="nbig"><div class="ntime">` +
+  return `<div class="gelcard${next.urgent ? " urgent" : ""} nextsplit tapme" data-open="trip"><div class="nbig">` +
+    '<div class="ntime">' +
     `${esc(next.time)}<small>${esc(next.ampm)}</small></div><div class="nsoon">${esc(next.soon)}</div></div>` +
     `<div class="ndetail"><div class="ntitle">${esc(next.title)}</div>${place}${leave}${bring}${status}</div></div>`;
 }
@@ -96,7 +100,8 @@ function trainCard() {
 
   // An empty board means the trains are done for the night
   if (!board.rows.length) {
-    return `<div class="glass pad"><span class="label">Trains · ${esc(title)}</span><div class="notrains">` +
+    return `<div class="glass pad tapme" data-open="trains"><span class="label">Trains · ${esc(title)}</span>` +
+      '<div class="notrains">' +
       "No more trains tonight</div></div>";
   }
   const rows = board.rows.map((train) => {
@@ -105,7 +110,7 @@ function trainCard() {
     return `<div class="train${row}"><span class="tt">${esc(train.time)}</span><span class="muted">` +
       `${esc(train.track)}</span><span class="${colour}">${esc(train.status)}</span></div>`;
   }).join("");
-  return `<div class="glass pad"><span class="label">Trains · ${esc(title)}</span>` +
+  return `<div class="glass pad tapme" data-open="trains"><span class="label">Trains · ${esc(title)}</span>` +
     `<div style="margin-top:3px">${rows}</div></div>`;
 }
 
@@ -123,7 +128,8 @@ function foilCard() {
 function musicCard() {
   const music = data.music;
   const art = music.art ? ` style="background-image:url('${esc(music.art)}')"` : "";
-  return `<div class="glass pad row"><div class="art"${art}></div><div class="grow"><div class="small" ` +
+  return `<div class="glass pad row tapme" data-open="playing"><div class="art"${art}></div><div class="grow">` +
+    '<div class="small" ' +
     `style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(music.track)}</div>` +
     `<div class="small muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">` +
     `${esc(music.artists.join(", "))}${music.album ? ` · ${esc(music.album)}` : ""}</div>` +
@@ -196,7 +202,7 @@ function drawNight() {
 // Draw the clock area, the Next card and the rail from the latest data
 function renderCards() {
   const header = data.updated ? `<span class="hcount stalehead">${esc(data.updated)}</span>` :
-    data.counts ? `<span class="hcount">${esc(data.counts)}</span>` : "";
+    data.counts ? `<span class="hcount tapme" data-open="lists">${esc(data.counts)}</span>` : "";
   const below = (data.foil.length ? 1 : 0) + (data.music ? 1 : 0);
   const clock = '<div class="shadow"><div class="row" style="align-items:flex-end;gap:10px">' +
     '<span id="clock" style="font-size:112px;font-weight:300;line-height:0.85;letter-spacing:-2px"></span>' +
@@ -284,6 +290,7 @@ async function refresh() {
       setScene(data.weather);
       chipHeat(data.chip_temp);
       renderCards();
+      openAtLeaveTime();
 
       // ?open=days (or weather, fencing) opens a bigger screen when the page loads, for checking it
       if (first && new URLSearchParams(location.search).get("open")) {
@@ -363,17 +370,139 @@ function fencingView() {
     `<div class="fbev">${event.live ? '<span class="fday live">LIVE</span>' :
       `<span class="fbtime">${esc(event.time)}</span>`}<span class="grow"><b>${esc(event.name)}</b>` +
     `<div class="muted">${esc([event.where, event.days].filter(Boolean).join(" · "))}` +
-    `${event.live && event.stage ? ` · now: ${esc(event.stage)}` : ""}</div></span></div>`).join("") +
+    `${event.live && event.stage ? ` · now: ${esc(event.stage)}` : ""}</div>` +
+    `${event.stream ? `<div class="fstream">${esc(event.stream)}</div>` : ""}` +
+    `${event.stages && event.stages.length ? '<div class="fstages">' + event.stages.map((stage) =>
+      `<span class="fstage ${esc(stage.state)}">${esc(stage.name)}</span>`).join("") + "</div>" : ""}` +
+    "</span></div>").join("") +
     "</div>").join("");
+}
+
+// The trip screen: the Next card on the left (big time, countdown, flight status, terminal and gate, leave line,
+// what to bring) and the steps of the trip on the right, the first one lit (orange when it's time to go)
+function tripView() {
+  const trip = data.big.trip;
+  const steps = trip.steps.map((step, index) => {
+    const lit = index === 0 ? (trip.urgent ? " go" : " lit") : "";
+    return `<div class="tstep${lit}"><span class="tstime">${esc(step.time)}</span>` +
+      `<span class="tsdot ${esc(step.kind)}"></span><span><div class="tsname${step.warn ? " warn" : ""}">` +
+      `${esc(step.title)}</div>${step.under ? `<div class="tsunder${step.late ? " warn" : ""}">` +
+      `${esc(step.under)}</div>` : ""}${step.earlier ? `<div class="tsearly">${esc(step.earlier)}</div>` : ""}` +
+      "</span></div>";
+  }).join("");
+  const status = trip.status ? `<span class="nstatus${trip.status_late ? " late" : ""}">${esc(trip.status)}</span>` :
+    "";
+  return `<div class="tripgrid"><div class="gelcard${trip.urgent ? " urgent" : ""} tripcard">` +
+    `<span class="label" style="align-self:flex-start">Next</span><div class="tripbig">${esc(trip.time)}` +
+    `<small>${esc(trip.ampm)}</small></div><div class="nsoon" style="text-align:left">${esc(trip.soon)}</div>` +
+    `${status}${trip.gate ? `<div>${esc(trip.gate)}</div>` : ""}` +
+    `<div class="nleave" style="margin-top:auto">${esc(trip.leave)}</div>` +
+    `${trip.bring ? `<div>Bring: ${esc(trip.bring)}</div>` : ""}</div><div class="tsteps">${steps}</div></div>`;
+}
+
+// One row of an opened list: title and the line under it, the value and how far off it is (orange when soon)
+function listRow(row) {
+  return `<div class="lrow"><div class="grow"><div class="lt">${esc(row.title)}</div>` +
+    `${row.under ? `<div class="muted ls">${esc(row.under)}</div>` : ""}</div><div class="lv"><div>` +
+    `${esc(row.value)}</div><div class="ls ${row.warn ? "warn" : "muted"}">${esc(row.when)}</div></div></div>`;
+}
+
+// The Lists screen: four columns (bills, assignments, trips, packages); a tapped column opens full screen
+function listsView() {
+  const columns = data.big.lists.columns;
+  const open = columns.find((column) => column.key === big.list);
+
+  // One list open: its rows in full, with the way back
+  if (open) {
+    return `<div class="row" style="margin-bottom:6px"><button class="ghost lback" type="button" data-list="">` +
+      `‹ All lists</button><span class="label">${esc(open.name)}</span></div>` +
+      (open.rows.map(listRow).join("") || '<div class="sbanner">Nothing here</div>');
+  }
+  return '<div class="lcols">' + columns.map((column) => `<div class="lcol tapme" data-list="${esc(column.key)}">` +
+    `<div class="row"><span class="label">${esc(column.name)}</span><span class="muted small">${column.count}</span>` +
+    "</div>" + (column.shown.map((row) => `<div class="lmini"><b>${esc(row.title)}</b>` +
+      `${row.under ? `<span class="muted">${esc(row.under)}</span>` : ""}` +
+      `<span class="${row.warn ? "warn" : "muted"}">` +
+      `${esc([row.value, row.when].filter(Boolean).join(" · "))}</span></div>`).join("") ||
+      '<div class="muted small">Nothing here</div>') +
+    `<div class="lmore">${column.more ? `+${column.more} more` : "Tap to open"}</div></div>`).join("") + "</div>";
+}
+
+// The Trains screen: both ways from the trip's first station, your plans' trains lit; a tapped train shows its stops
+function trainsView() {
+  const board = data.big.trains;
+  const all = board.ways.flatMap((way) => way.trains);
+  const shown = all.find((train) => train.id === big.train);
+
+  // One train's stops, with the way back
+  if (shown) {
+    return `<div class="row" style="margin-bottom:6px"><button class="ghost lback" type="button" data-stops="">` +
+      `‹ Trains</button><span style="font-size:17px;font-weight:600">NJT ${esc(shown.id)} · ${esc(shown.time)} · ` +
+      `${esc(shown.track || "Track not posted")} · ${esc(shown.status)}</span></div><div class="tstops">` +
+      shown.stops.map((stop) => `<div>${esc(stop.time)} · ${esc(stop.name)}</div>`).join("") + "</div>";
+  }
+  return '<div class="tcols">' + board.ways.map((way) => `<div><span class="label">${esc(way.name)}</span>` +
+    (way.trains.map((train) => `<div class="trow tapme${train.mine ? " mine" : ""}${train.state === "cancelled" ?
+      " cancelled" : ""}" data-stops="${esc(train.id)}"><span class="tt">${esc(train.time)}</span>` +
+      `<span class="muted">${esc(train.track)}</span><span class="${{late: "warn", cancelled: "bad"}[train.state] ||
+      "muted"}">${esc(train.status)}${train.mine ? '<span style="color:#9fd8ff"> · yours</span>' : ""}</span>` +
+      `<span class="muted">${esc(train.arrives)}</span></div>`).join("") ||
+      '<div class="muted" style="margin-top:6px">No more trains tonight</div>') + "</div>").join("") + "</div>";
+}
+
+// Now playing as a poster: the album art fills the card behind the song in big text (show only)
+function playingView() {
+  const music = data.music;
+
+  // Nothing playing: say so
+  if (!music) {
+    return '<div class="sbanner">Nothing\'s playing</div>';
+  }
+  const art = music.art ? ` style="background-image:url('${esc(music.art)}')"` : "";
+  return `<div class="poster"${art}></div><div class="posterbody"><div class="ptitle">${esc(music.track)}</div>` +
+    `<div class="psub">${esc(music.artists.join(", "))}${music.album ? ` · ${esc(music.album)}` : ""}</div>` +
+    '<div class="bar pbar"><i id="bigMusicBar"></i></div></div>';
+}
+
+// A bigger screen's title: the plan's for the trip, the station for the trains, else its name
+function bigTitle(kind) {
+  // The trip and the trains name what they're about
+  if (kind === "trip") {
+    return esc(data.big.trip.title);
+  } else if (kind === "trains") {
+    return `Trains · ${esc(data.big.trains.station)}`;
+  }
+  return BIG_TITLES[kind];
+}
+
+// Return true if there's something to show on a bigger screen
+function bigHasData(kind) {
+  const needs = {trip: data.big.trip, lists: data.big.lists, trains: data.big.trains};
+  return !(kind in needs) || Boolean(needs[kind]);
+}
+
+// When the Next card turns orange (time to go), open its trip screen by itself, once per plan (never over the night
+// clock, a ringing card or another screen)
+function openAtLeaveTime() {
+  const next = data.next;
+  const key = next ? `${next.title}|${next.time}${next.ampm}` : "";
+
+  // Only once per plan, at its leave time
+  if (next && next.urgent && autoOpened !== key && !big.open && !live.ringing && !nightShowing()) {
+    autoOpened = key;
+    openBig("trip");
+  }
 }
 
 // Open a bigger screen over the wall, closing by itself after 30 seconds; the hare steps aside to the big tree
 function openBig(kind) {
   // Only screens there's data for
-  if (!data || !BIG_TITLES[kind]) {
+  if (!data || !BIG_TITLES[kind] || !bigHasData(kind)) {
     return;
   }
   big.open = kind;
+  big.list = "";
+  big.train = "";
   big.closesAt = Date.now() + BIG_SECONDS * 1000;
   wall.bigOpen = true;
   renderBig();
@@ -396,8 +525,11 @@ function renderBig() {
     holder.innerHTML = "";
     return;
   }
-  const views = {days: daysView, weather: weatherView, fencing: fencingView};
-  holder.innerHTML = `<div class="bigcard glass"><div class="bighead"><span class="bigtitle">${BIG_TITLES[big.open]}` +
+  const views = {days: daysView, weather: weatherView, fencing: fencingView, trip: tripView, lists: listsView,
+    trains: trainsView, playing: playingView};
+  const urgent = big.open === "trip" && data.big.trip.urgent ? " urgent" : "";
+  holder.innerHTML = `<div class="bigcard glass${urgent}"><div class="bighead"><span class="bigtitle">` +
+    `${bigTitle(big.open)}` +
     '</span><span class="grow"></span><span class="bigclose" id="bigCountdown"></span>' +
     '<button class="ghost" type="button" data-big="close">Close</button></div>' +
     `<div class="bigbody">${views[big.open]()}</div></div>`;
@@ -418,6 +550,13 @@ function drawBig() {
     return;
   }
   document.getElementById("bigCountdown").textContent = `Closes in ${left} s`;
+  const bar = document.getElementById("bigMusicBar");
+
+  // The poster's bar moves on like the card's
+  if (bar && data.music && data.music.duration_ms) {
+    const progress = data.music.progress_ms + (Date.now() - fetchedAt);
+    bar.style.width = `${Math.min(100, 100 * progress / data.music.duration_ms)}%`;
+  }
 }
 
 // Stop John wherever he is in a conversation (a tap anywhere while he listens, thinks or talks)
@@ -437,6 +576,8 @@ function onTap(event) {
   const button = event.target.closest("[data-ring]");
   const close = event.target.closest("[data-big]");
   const open = event.target.closest("[data-open]");
+  const list = event.target.closest("[data-list]");
+  const stops = event.target.closest("[data-stops]");
 
   // While John is busy any tap stops him; otherwise a ring button, Close, a card that opens its screen, or the night
   // clock
@@ -446,6 +587,11 @@ function onTap(event) {
     ringButton(button.dataset.ring);
   } else if (close) {
     closeBig();
+  } else if (big.open && (list || stops)) {
+    big.list = list ? list.dataset.list : big.list;
+    big.train = stops ? stops.dataset.stops : big.train;
+    big.closesAt = Date.now() + BIG_SECONDS * 1000;  // a tap inside keeps it open
+    renderBig();
   } else if (open && !big.open) {
     openBig(open.dataset.open);
   } else if (event.target.closest("#night")) {

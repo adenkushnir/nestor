@@ -137,9 +137,10 @@ def tool_definitions():
         tool("music_control", "Pause, resume, skip to the next or previous song on Spotify, or check what's playing.",
              {"action": {"type": "string", "enum": ["pause", "resume", "next", "previous", "now_playing"]}}),
         tool("show_on_wall", "Open a bigger screen on the wall display (the 7-inch screen at home): the user's week "
-             "(today in full and the next 6 days), the weather (the next 12 hours in words), or men's foil this week; "
-             "close closes it. It closes by itself after 30 seconds. Use it when asked to show something on the wall "
-             "or screen.",
+             "(today in full and the next 6 days), the weather (the next 12 hours in words), men's foil this week, "
+             "the trip to their next plan (leave time, walk, train, station, flight), their lists (bills, "
+             "assignments, trips and packages), the trains both ways, or what's playing; close closes it. It closes "
+             "by itself after 30 seconds. Use it when asked to show something on the wall or screen.",
              {"view": {"type": "string", "enum": list(wall_live.WALL_VIEWS)}}),
         tool("remember", "Remember a lasting fact about the user when asked, or what lighting they liked for an "
              "activity (e.g. 'likes dim warm drifting light for comedies').", {"fact": TEXT}),

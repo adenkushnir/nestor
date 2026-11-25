@@ -6,7 +6,7 @@ import datetime
 import threading
 from nestor import timers
 JOHN_STATES = ("idle", "listening", "thinking", "talking", "followup")
-WALL_VIEWS = ("week", "weather", "fencing", "close")
+WALL_VIEWS = ("week", "weather", "fencing", "trip", "lists", "trains", "playing", "close")
 ALARM_AHEAD_HOURS = 24  # The night clock shows the first alarm within this many hours
 changed = threading.Condition()
 version = 0
@@ -34,7 +34,7 @@ def set_john(state, window=0):
         john_window = window if state == "followup" else 0
         poke()
 
-# Open a bigger screen on the wall ("week", "weather" or "fencing"), or close it ("close"); returns what was asked
+# Open a bigger screen on the wall (one of WALL_VIEWS), or close it ("close"); returns what was asked
 def show(view):
     global big_request
 

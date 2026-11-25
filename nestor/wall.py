@@ -20,6 +20,13 @@ SCENES = {0: "clear", 1: "clear", 2: "partly", 3: "overcast", 45: "fog", 48: "fo
 LIST_WORDS = (("bills", "bill", "bills"), ("assignments", "assignment", "assignments"),
               ("packages", "package", "packages"), ("trips", "trip", "trips"))
 CHIP_TEMP_PATH = "/sys/class/thermal/thermal_zone0/temp"  # The board's chip temperature (Linux), in thousandths
+BOARD_ROWS = 6  # Trains each way on the Trains screen
+EARLIER_TRAINS = 2  # Earlier trains named under your train on the trip screen
+LIST_ROWS = 3  # Items each Lists column shows before it's opened
+# A men's foil event's stages, and words in Datebook's stage line that say which one it's at (checked in this order)
+FOIL_STAGES = ("Pools", "Table of 64", "Table of 32", "Table of 16", "Quarterfinals", "Semifinals", "Final")
+STAGE_WORDS = (("pool", 0), ("64", 1), ("32", 2), ("16", 3), ("quarter", 4), ("of 8", 4), ("semi", 5), ("of 4", 5),
+               ("final", 6))
 log = logging.getLogger(__name__)
 
 # The scene picture for a weather code ("wet" for rain and drizzle)
@@ -265,6 +272,199 @@ def foil_rows(fencing, now):
     rows.sort(key=lambda row: (not row["live"], row["sort"]))
     return [{key: value for key, value in row.items() if key != "sort"} for row in rows]
 
+# A "16:52" time from Datebook as the wall writes it, "4:52 PM" ("" when it's missing)
+def clock_of(hhmm):
+    # Missing or odd times are left out
+    try:
+        hour, minute = (int(part) for part in hhmm.split(":"))
+    except (AttributeError, ValueError):
+        return ""
+    return f"{hour % 12 or 12}:{minute:02d} {'AM' if hour < 12 else 'PM'}"
+
+# One step of a trip: its time, what happens, a line under it, its kind (walk, train, stop, goal or plane), whether
+# it's late, whether it's what you aim for, and the earlier trains under a train
+def trip_step(time, title, under, kind, late=False, warn=False, earlier=""):
+    return {"time": time, "title": title, "under": under, "kind": kind, "late": bool(late), "warn": warn,
+            "earlier": earlier}
+
+# The board's train that leaves at a "16:52" time (None when it isn't on the board)
+def board_train(board, hhmm):
+    return next((train for train in board if train["departs"] and train["departs"].strftime("%H:%M") == hhmm), None)
+
+# The trains before yours that also stop where yours takes you, still to come: "4:22 PM · 4:32 PM" ("" for none)
+def earlier_trains(board, mine, to_name, now):
+    wanted = (to_name or "").lower()
+    code = next((stop["code"] for stop in mine["stops"] if wanted and (wanted in stop["name"].lower() or
+                                                                        stop["name"].lower() in wanted)), None)
+    # Without the stop there's nothing to compare
+    if not code:
+        return ""
+    before = [train for train in board if train["departs"] and now < train["departs"] < mine["departs"] and
+              "cancel" not in train["status"].lower() and trains.arrival_at(train, code)]
+    return " · ".join(clock_text(train["departs"]) for train in before[-EARLIER_TRAINS:])
+
+# The trip screen for the next event: its card (big time, countdown, flight status, terminal and gate, leave line,
+# what to bring) and the steps of the trip (leave, the train with its track and earlier trains, the station, being at
+# the airport early, then the flight or the event); None without an event
+def trip_screen(event, board, now):
+    # Nothing next, nothing to show
+    if not event:
+        return None
+    start = read_moment(event["start"])
+    leave_by = read_moment(event.get("leave_by"))
+    urgent = bool(leave_by and now >= leave_by)
+    flight = event.get("flight") or {}
+    train = event.get("train") or {}
+    travel = event.get("travel") or ""
+    early = int(event.get("early") or 0)
+    time, ampm = clock_parts(start)
+    steps = []
+
+    # Leaving: now, or at the leave time
+    if leave_by:
+        steps.append(trip_step(clock_text(leave_by), "Leave now" if urgent else "Leave", travel, "walk"))
+
+    # The train, live from the board when it's on it, with the earlier ones under it, then where it gets you
+    if train.get("departs"):
+        mine = board_train(board, train["departs"])
+        late = mine["minutes_late"] if mine else int(train.get("late") or 0)
+        track = (mine["track"] if mine else train.get("track")) or "not posted yet"
+        cancelled = "cancel" in ((mine["status"] if mine else train.get("status")) or "").lower()
+        state = "Cancelled" if cancelled else f"{late} min late" if late > 0 else "On time"
+        earlier = earlier_trains(board, mine, train.get("to"), now) if mine else ""
+        steps.append(trip_step(clock_of(train["departs"]), f"NJT {train.get('id') or ''} · Track {track}".strip(),
+                               state, "train", late=late > 0 or cancelled,
+                               earlier=f"Earlier trains: {earlier}" if earlier else ""))
+
+        # The station it takes you to
+        if train.get("arrives"):
+            steps.append(trip_step(clock_of(train["arrives"]), train.get("to") or "", "AirTrain to the terminal"
+                                   if flight.get("text") else "", "stop"))
+
+    # A flight: at the airport early, then it departs; anything else: it starts
+    if flight.get("text"):
+        departs = read_moment(flight.get("departs")) or start
+        lands = read_moment(flight.get("lands"))
+        city = f" in {flight['to_city']}" if flight.get("to_city") else ""
+
+        # Being at the airport early, when there's a time for it
+        if early:
+            steps.append(trip_step(clock_text(start - datetime.timedelta(minutes=early)), "At the airport",
+                                   f"{early} min before departure", "goal", warn=True))
+        steps.append(trip_step(clock_text(departs), f"{flight.get('number') or 'Flight'} departs",
+                               f"Lands {clock_text(lands)}{city}" if lands else "", "plane", late=flight.get("late")))
+    else:
+        steps.append(trip_step(clock_text(start), event.get("title") or "", event.get("place") or "", "goal"))
+    gate = " · ".join(part for part in (f"Terminal {flight['terminal']}" if flight.get("terminal") else "",
+                                        f"gate {flight['gate']}" if flight.get("gate") else "") if part)
+    leave = (f"Leave now · {travel}" if urgent else f"Leave by {clock_text(leave_by)} · {travel}") if leave_by else ""
+    return {"title": event.get("title") or "", "time": time, "ampm": ampm, "urgent": urgent,
+            "soon": "time to go" if urgent else countdown(now, start), "status": flight.get("text") or "",
+            "status_late": bool(flight.get("late")), "gate": gate, "leave": leave.rstrip(" ·"),
+            "bring": event.get("bring") or "", "steps": steps}
+
+# How far off a day is, as the lists say it: "Overdue", "Today", "Tomorrow" or "in 3 days"
+def days_off(day, today):
+    gap = (day - today).days
+
+    # Past, today, tomorrow or later
+    if gap < 0:
+        return "Overdue"
+    elif gap == 0:
+        return "Today"
+    elif gap == 1:
+        return "Tomorrow"
+    return f"in {gap} days"
+
+# A day as the lists write it, "Fri, Nov 27"
+def day_text(day):
+    return f"{day.strftime('%a, %b')} {day.day}"
+
+# One row of a list: its title, a line under it, a value on the right (amount or time), how far off it is, and
+# whether it needs you soon (orange)
+def list_row(title, under, value, day, today):
+    soon = days_off(day, today) if day else ""
+    return {"title": title, "under": under, "value": value, "when": soon,
+            "warn": soon in ("Overdue", "Today", "Tomorrow")}
+
+# The Lists screen: four columns (bills, assignments, trips, packages), each soonest first, from Datebook's lists
+def lists_screen(lists, now):
+    lists = lists or {}
+    today = now.date()
+    columns = []
+    kinds = (("bills", "Bills"), ("assignments", "Assignments"), ("trips", "Trips"), ("packages", "Packages"))
+
+    # Each kind of list as a column
+    for kind, name in kinds:
+        rows = []
+
+        # Each item of the list, with the line and value that suit its kind
+        for item in lists.get(kind) or []:
+            due = read_moment(item.get("due") or item.get("start") or item.get("expected"))
+            day = due.date() if due else None
+            timed = len(item.get("due") or "") > 10
+
+            # Bills, assignments, trips and packages each read their own way
+            if kind == "bills":
+                under = (f"Was due {day_text(day)}" if day < today else f"Due {day_text(day)}") if day else ""
+                rows.append((due, list_row(item.get("title") or "", under, item.get("amount") or "", day, today)))
+            elif kind == "assignments":
+                value = f"{due.strftime('%a')} {clock_text(due)}" if timed else (day_text(day) if day else "")
+                rows.append((due, list_row(item.get("title") or "", item.get("class") or "", value, day, today)))
+            elif kind == "trips":
+                end = read_moment(item.get("end"))
+                dates = f"{day_text(day)} – {day_text(end.date())}" if day and end and end.date() != day else \
+                    (day_text(day) if day else "")
+                plans = " · ".join(plan.get("title") or "" for plan in item.get("plans") or [])
+                rows.append((due, list_row(item.get("title") or "", dates, plans, day, today)))
+            else:
+                carrier = item.get("carrier") or ""
+                carrier = carrier if len(carrier) <= 4 else carrier.title()  # UPS stays, AMAZON reads Amazon
+                rows.append((due, list_row(item.get("title") or "", carrier, day_text(day) if day else "", day,
+                                           today)))
+        rows.sort(key=lambda pair: pair[0] or datetime.datetime.max)
+        items = [row for due, row in rows]
+        columns.append({"key": kind, "name": name, "count": len(items), "rows": items, "shown": items[:LIST_ROWS],
+                        "more": len(items) - LIST_ROWS if len(items) > LIST_ROWS else 0})
+    return {"columns": columns}
+
+# One train on the Trains screen: time, track and state (board_row), where it ends and when, whether it's a train
+# picked for one of your plans, and its stops for tapping
+def screen_train(train, end_code, picked):
+    state = "cancelled" if "cancel" in train["status"].lower() else "late" if train["minutes_late"] > 0 else ""
+    row = board_row(train, state)
+    stops = [stop for stop in train["stops"] if stop["time"]]
+    last = next((stop for stop in stops if stop["code"] == end_code), stops[-1] if stops else None)
+    arrives = f"{last['name'].replace(' Station', '')} {clock_parts(last['time'])[0]}" if last else ""
+    return dict(row, id=train["id"], arrives=arrives, mine=row["clock"] in picked,
+                stops=[{"name": stop["name"].replace(" Station", ""), "time": clock_text(stop["time"])}
+                       for stop in stops])
+
+# The Trains screen: the trip's first station both ways, trains toward the trip's end on the left and the other way
+# on the right (named by where most of them go), with the trains picked for your plans lit
+def trains_screen(board, trip, trip_names, picked, now):
+    coming = [train for train in board if train["departs"] and train["departs"] > now - datetime.timedelta(minutes=1)]
+    toward = [train for train in coming if trains.arrival_at(train, trip[1])][:BOARD_ROWS]
+    other = [train for train in coming if not trains.arrival_at(train, trip[1])][:BOARD_ROWS]
+    ends = [train["destination"] for train in other if train["destination"]]
+    other_name = max(set(ends), key=ends.count) if ends else "the other way"
+    to_name = (trip_names.get("to_name") or trip[1]).replace(" Penn Station", "").replace(" Station", "")
+    return {"station": (trip_names.get("from_name") or trip[0]).replace(" Station", ""),
+            "ways": [{"name": f"Toward {to_name}",
+                      "trains": [screen_train(train, trip[1], picked) for train in toward]},
+                     {"name": f"Toward {other_name}", "trains": [screen_train(train, "", picked) for train in other]}]}
+
+# Where a men's foil event is in its day, as the standard stages with the current one lit (empty without a stage)
+def foil_stages(stage):
+    words = (stage or "").lower()
+    current = next((index for word, index in STAGE_WORDS if word in words), None)
+
+    # A stage line that names none of them gets no bar
+    if current is None:
+        return []
+    return [{"name": name, "state": "done" if index < current else "now" if index == current else "next"}
+            for index, name in enumerate(FOIL_STAGES)]
+
 # Keeps the wall's slow sources (weather and trains) and puts together everything the screen shows
 class Wall:
     # Keep the settings and the NJ Transit account (None without one)
@@ -344,6 +544,7 @@ class Wall:
             hours = self.hours
         rows = train_rows(board, trip[1], left, now) if trip[1] else []
         event = next_event(snapshot.get("events") or [], now)
+        picked = {(item.get("train") or {}).get("departs") for item in snapshot.get("events") or []} - {None}
         music = spotify.music.now if spotify.music else None
         nestor_reminders = reminders.todays_reminders(now.date())
         return {
@@ -363,7 +564,11 @@ class Wall:
             "foil": foil_rows(snapshot.get("fencing"), now),
             "big": {"week": week_screen(snapshot, now, nestor_reminders),
                     "weather": weather_screen(hours, forecast, now),
-                    "fencing": foil_screen(snapshot.get("fencing"), now)},
+                    "fencing": foil_screen(snapshot.get("fencing"), now),
+                    "trip": trip_screen(event, board, now),
+                    "lists": lists_screen(snapshot.get("lists"), now),
+                    "trains": trains_screen(board, trip, trip_names, picked, now) if trip[0] and trip[1] and self.rail
+                    else None},
             "chip_temp": chip_temperature(),
         }
 
@@ -566,7 +771,8 @@ def week_screen(snapshot, now, nestor_reminders):
                        "past": past} for key, time, title, place, leave, bring, tag, past in rows],
             "days": days}
 
-# The men's foil screen: this week's events by day, LIVE with today's stage (just the schedule)
+# The men's foil screen: this week's events by day, LIVE with today's stage, its place among the stages and its
+# stream times (just the schedule)
 def foil_screen(fencing, now):
     days = {}
     week_end = now.date() + datetime.timedelta(days=7)
@@ -583,10 +789,15 @@ def foil_screen(fencing, now):
         last = end.strftime("%a")
         timed = len(event.get("start", "")) > 10
         label = f"{start.strftime('%a %b')} {start.day}"
+        live_from = read_moment(event.get("live_from"))
+        live_until = read_moment(event.get("live_until"))
+        live = foil_live(event, now)
         days.setdefault((start.date(), label), []).append({
             "name": event.get("name") or "", "where": event.get("where") or "",
             "days": first if first == last else f"{first}–{last}", "time": clock_text(start) if timed else "",
-            "live": foil_live(event, now), "stage": event.get("stage") or ""})
+            "live": live, "stage": event.get("stage") or "",
+            "stream": f"Stream on {clock_text(live_from)} – {clock_text(live_until)}" if live_from and live_until
+            else "", "stages": foil_stages(event.get("stage")) if live else []})
     return [{"day": label, "events": events} for (date, label), events in sorted(days.items())]
 
 # The chip's temperature in °C on the Tinker Board (None elsewhere), so the wall can go lite when it runs hot
