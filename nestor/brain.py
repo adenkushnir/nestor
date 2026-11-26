@@ -4,6 +4,8 @@ import datetime
 import logging
 import re
 import anthropic
+from nestor import datebook
+from nestor import john_rules
 from nestor.john_tools import JohnTools
 CONVERSATION_GAP = datetime.timedelta(minutes=5)  # A longer pause starts a new conversation
 MAX_ROUNDS = 8  # Tool calls in one answer before giving up
@@ -103,6 +105,7 @@ class Brain:
         self.tools = JohnTools(announcer, settings, rail)
         self.messages = []
         self.last_turn = None
+        self.rules = ""  # Aden's rules that apply right now, added to the instructions each turn
 
     # Answer what was said; returns the text to speak ("" when a tool already spoke, e.g. goodnight)
     def ask(self, heard, now=None):
@@ -113,6 +116,8 @@ class Brain:
         if first_turn:
             self.messages = []
         self.messages.append({"role": "user", "content": f"{self.tools.context(now, first_turn)}\n{heard}"})
+        self.rules = john_rules.prompt_block(now, self.tools.announcer.quiet_hours.is_quiet(now),
+                                             datebook.phone_home(now))
 
         # Ask Claude, keeping the conversation only if the answer worked
         try:
@@ -130,7 +135,7 @@ class Brain:
         for round_number in range(MAX_ROUNDS):
             response = self.client.beta.messages.create(
                 model=self.model, max_tokens=16000, betas=[FALLBACK_BETA], fallbacks="default",
-                system=self.system_prompt, tools=self.tools.definitions, messages=self.messages,
+                system=self.system_prompt + self.rules, tools=self.tools.definitions, messages=self.messages,
                 output_config={"effort": self.effort}, cache_control={"type": "ephemeral"})
             self.messages.append({"role": "assistant", "content": response.content})
             tool_calls = [block for block in response.content if block.type == "tool_use"]
