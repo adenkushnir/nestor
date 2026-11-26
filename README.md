@@ -215,6 +215,22 @@ and then calls you sir, boss or chief. After an answer, he listens for about 5 s
 
 For music, see [Spotify](#spotify); for lights, see [Govee lights](#govee-lights).
 
+### John's rules
+
+Your own rules for how John talks and answers, on top of his built-in style (where they differ, yours win). Set them
+from a Claude Desktop or Claude Code chat with the [Nestor connector](#claude-code-and-claude-desktop):
+- "Show me John's rules": the chat opens an artifact called **John's rules**, a page of every rule by category, with
+  its number, when it applies and whether it's on. The chat updates that page after every change.
+- "Add a rule for John: never call me chief", "Keep answers to one sentence after 10 PM on weekdays", "No sports talk
+  during quiet hours".
+- "Turn off rule 3", "Make rule 2 weekends only", "Make rule 4 apply all the time", "Delete rule 5".
+
+Each rule has a category (Personality, How he answers, Words and names, Topics, Never do) and, if you like, times:
+clock times (past midnight works, like 22:00 to 07:00), days, and one of Nestor's own times (quiet hours, awake hours,
+phone away, phone home). A rule with no times always applies. Before a new or changed rule is saved, Claude checks it
+against the others; if it clashes, the chat tells you which ones and asks whether to replace them, keep both, or drop
+the new one. Rules are kept in `data/john_rules.json`, and John picks up changes on his next answer.
+
 ### Timers and alarms
 
 Timers and alarms ring on the speaker in bursts of the alarm tone with a few seconds' gap, so John can hear you. The
@@ -412,7 +428,8 @@ connector the Claude app starts by itself. A chat can then:
 - read Datebook and add to it (your phone shows its usual prompt to confirm) or mark things done;
 - speak on the speaker (held until morning in the sleeping period), and set reminders, timers and alarms;
 - check trains and the briefing;
-- control the lights, with the same back-and-forth over moods as John, and Spotify.
+- control the lights, with the same back-and-forth over moods as John, and Spotify;
+- set [John's rules](#johns-rules) for how he talks, shown as an artifact page.
 
 John's memory stays John's: chats can't read or change it. The connector passes every call to Nestor's web API, so
 Nestor has to be running.

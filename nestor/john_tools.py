@@ -4,8 +4,10 @@
 import datetime
 import json
 import logging
+import anthropic
 from nestor import datebook
 from nestor import govee
+from nestor import john_rules
 from nestor import memory
 from nestor import reminders
 from nestor import routines
@@ -15,10 +17,20 @@ from nestor import trains
 from nestor import wall_live
 from nestor.announcer import read_history
 from nestor.briefing import build_briefing
+from nestor.config import load_secrets
 from nestor.spoken import spoken_clock
 from nestor.spoken import spoken_moment
 MAX_TOOL_RESULT = 12000  # Characters; a tool result longer than this is cut, so one answer stays affordable
 TEXT = {"type": "string"}
+# What a rule for John is made of: its category, words and when it applies (empty fields: any time)
+RULE_FIELDS = {"category": {"type": "string", "enum": list(john_rules.CATEGORIES)},
+               "text": {"type": "string", "description": "The rule in plain words, like 'Never call me chief'"},
+               "from": {"type": "string", "description": "HH:MM it starts applying each day (24-hour); empty for "
+                                                         "all day"},
+               "to": {"type": "string", "description": "HH:MM it stops applying; empty for all day"},
+               "nestor_time": {"type": "string", "enum": [""] + list(john_rules.NESTOR_TIMES)},
+               "days": {"type": "string", "description": "Days it applies: 'weekends', 'weekdays', or like "
+                                                         "'mon wed fri'; empty for every day"}}
 WHICH_LIGHTS = {"type": "string", "description": "Which lights, in the user's words: 'the lights', 'the wall', 'both "
                 "lights', or a group name; empty if they didn't say"}
 WEB_SEARCH = {"type": "web_search_20260209", "name": "web_search", "max_uses": 8}
@@ -155,6 +167,23 @@ def connector_tool_definitions():
              "and said in the morning instead.", {"text": TEXT}),
         tool("home_status", "The time at home, whether the sleeping period is on, whether the phone is home, and "
              "what's ringing."),
+        tool("john_rules", "Aden's rules for John (how he talks and answers, on top of his built-in style): every "
+             "rule with its number, category, words, when it applies and whether it's on, plus artifact_html, an "
+             "organized page of them. Show the rules by publishing artifact_html as the artifact titled \"John's "
+             "rules\" (update that one if it exists, never a second); do the same after every change."),
+        tool("add_john_rule", "Add a rule for John. Claude checks it against the others first: if it clashes, nothing "
+             "is saved and the clashing rules come back, so tell Aden and ask whether to replace them (send their "
+             "numbers in replace), keep both (keep_both true) or drop the new one.", RULE_FIELDS | {
+                 "replace": {"type": "string", "description": "Numbers of rules to remove in its place, like '3' or "
+                                                              "'3, 5'; empty for none"},
+                 "keep_both": {"type": "boolean", "description": "Save it even though it clashes"}}),
+        tool("edit_john_rule", "Change a rule's words, category or when it applies (empty fields stay as they are; "
+             "always: true makes it apply all the time). Checked for clashes like a new rule.", RULE_FIELDS | {
+                 "id": {"type": "integer"}, "always": {"type": "boolean"},
+                 "keep_both": {"type": "boolean", "description": "Save it even though it clashes"}}),
+        tool("switch_john_rule", "Turn one of John's rules on or off without deleting it.",
+             {"id": {"type": "integer"}, "on": {"type": "boolean"}}),
+        tool("remove_john_rule", "Delete one of John's rules.", {"id": {"type": "integer"}}),
     ]
 
 # Cut a tool result to a sensible size for one answer
@@ -257,6 +286,8 @@ class JohnTools:
             return self.lights(name, arguments)
         elif name in ("play_music", "music_control"):
             return self.music(name, arguments)
+        elif name in ("john_rules", "add_john_rule", "edit_john_rule", "switch_john_rule", "remove_john_rule"):
+            return self.rules(name, arguments)
         elif name == "show_on_wall":
             return json.dumps({"shown": wall_live.show(arguments["view"])})
         elif name == "speak":
@@ -269,6 +300,53 @@ class JohnTools:
             return json.dumps({"forgotten": memory.forget(arguments["about"])})
         else:
             raise ValueError(f"no tool called {name}")
+
+    # Aden's rules for John: list them (with the artifact page), add, change, switch or remove one; new and changed
+    # rules are checked for clashes by Claude first
+    def rules(self, name, arguments):
+        # A bad rule (unknown category, odd time, no such number) says why
+        try:
+            if name == "john_rules":
+                rules = john_rules.read_rules()
+                return json.dumps({"rules": [dict(rule, when=john_rules.when_text(rule)) for rule in rules],
+                                   "artifact_html": john_rules.page_html(rules)})
+            elif name == "switch_john_rule":
+                return json.dumps({"switched": john_rules.switch_rule(arguments["id"], arguments["on"])})
+            elif name == "remove_john_rule":
+                return json.dumps({"removed": john_rules.remove_rule(arguments["id"])})
+            rule_id = arguments.get("id") if name == "edit_john_rule" else None
+            text = arguments.get("text") or (john_rules.find_rule(john_rules.read_rules(), rule_id)["text"]
+                                             if rule_id else "")
+            replace = [int(number) for number in str(arguments.get("replace") or "").replace(",", " ").split()]
+            found = [] if arguments.get("keep_both") else [number for number in john_rules.clashes(
+                self.claude(), self.settings.get("john_model", "claude-opus-5-5"), text,
+                john_rules.read_rules(), rule_id) if number not in replace]
+
+            # A clash stops it until Aden says what to do
+            if found:
+                return json.dumps({"saved": False, "clashes_with": [rule for rule in john_rules.read_rules()
+                                                                    if rule["id"] in found]})
+            fields = (arguments.get("category", ""), arguments.get("text", ""), arguments.get("from", ""),
+                      arguments.get("to", ""), arguments.get("nestor_time", ""), arguments.get("days", ""))
+
+            # Add it (removing the ones it replaces), or change the one named
+            if name == "add_john_rule":
+                for number in replace:
+                    john_rules.remove_rule(number)
+                return json.dumps({"saved": True, "rule": john_rules.add_rule(*fields)})
+            if arguments.get("always"):
+                john_rules.clear_times(rule_id)
+            return json.dumps({"saved": True, "rule": john_rules.edit_rule(rule_id, *fields)})
+        except (ValueError, KeyError) as error:
+            return json.dumps({"error": str(error)})
+
+    # A Claude client for checking rules (made once, with Nestor's own key; None without one)
+    def claude(self):
+        # Made the first time it's needed
+        if not hasattr(self, "rules_client"):
+            key = load_secrets().get("ANTHROPIC_API_KEY")
+            self.rules_client = anthropic.Anthropic(api_key=key) if key else None
+        return self.rules_client
 
     # Datebook's copy, cut down to what answers need, with Canvas titles as they should be said (no course codes) and
     # each class's nickname in "class"
