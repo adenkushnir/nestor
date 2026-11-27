@@ -5,6 +5,7 @@ import datetime
 import json
 import logging
 from nestor import datebook
+from nestor import campus_buses
 from nestor import govee
 from nestor import journeys
 from nestor import memory
@@ -88,6 +89,14 @@ def tool_definitions():
              {"from_station": {"type": "string", "description": "Station name or code, or empty"},
               "to_station": {"type": "string", "description": "Station name or code, or empty"},
               "reverse": {"type": "boolean", "description": "True for the saved trip's way back"}}),
+        tool("next_buses", "The next Rutgers campus buses leaving a stop (New Brunswick), with live delays when the "
+             "bus is running: route, where it's headed, when it's due and how late. Say the next two in one "
+             "sentence, like 'The LX leaves College Ave at 2:16, two minutes late, then another at 2:22'.",
+             {"from_stop": {"type": "string", "description": "The stop in the user's words, like 'College Ave' or "
+                                                             "'Busch Student Center'"},
+              "route": {"type": "string", "description": "The route, like LX, A, EE or H; empty for any"},
+              "to_stop": {"type": "string", "description": "Where they're going, to only count buses that stop "
+                                                           "there; empty if not said"}}),
         tool("set_lights", "Control the Govee lights directly: on or off, a colour, white at a colour temperature, "
              "and/or a brightness. Those lights leave any mood; other lights carry on with theirs.",
              {"lights": WHICH_LIGHTS,
@@ -149,7 +158,8 @@ def tool_definitions():
              "('what if I leave at 3', 'by train instead'). Answer with its one-line summary, then offer to make it a "
              "plan. Nothing is saved.",
              {"to": {"type": "string", "description": "The place, in the user's words or as an address"},
-              "mode": {"type": "string", "enum": ["transit", "walk", "drive"]},
+              "mode": {"type": "string", "enum": ["transit", "bus", "walk", "drive"],
+                       "description": "transit uses Rutgers buses when they help; bus always takes a campus bus"},
               "only": {"type": "string", "enum": ["", "train", "bus"],
                        "description": "For transit: trains only or buses only, when asked; empty for both"},
               "leave_at": {"type": "string", "description": "HH:MM or YYYY-MM-DDTHH:MM when leaving; empty for now"},
@@ -274,6 +284,8 @@ class JohnTools:
             ringing = timers.scheduler.stop() if name == "stop_ringing" else timers.scheduler.snooze(
                 arguments["minutes"] or timers.SNOOZE_MINUTES)
             return json.dumps({"done": ringing, "note": "" if ringing else "nothing was ringing"})
+        elif name == "next_buses":
+            return self.next_buses(arguments["from_stop"], arguments.get("route", ""), arguments.get("to_stop", ""))
         elif name == "next_trains":
             return self.next_trains(arguments["from_station"], arguments["to_station"], arguments["reverse"])
         elif name in ("set_lights", "preview_mood", "adjust_mood", "save_mood", "list_moods", "use_mood",
@@ -465,6 +477,18 @@ class JohnTools:
         level = max(0, min(100, percent)) / 100
         self.announcer.speaker.set_volume(level)
         return json.dumps({"percent": round(level * 100)})
+
+    # The next Rutgers buses from a stop (on a route, toward a stop, when given), with their live delays
+    def next_buses(self, from_stop, route, to_stop):
+        # A stop that can't be found, or no timetable, says why
+        try:
+            found = campus_buses.next_buses(from_stop, route, to_stop)
+        except ValueError as error:
+            return json.dumps({"error": str(error)})
+        return json.dumps({"stop": found["stop"], "to": found["to"], "buses": [
+            {"route": bus["route"], "toward": bus["toward"], "due": journeys.clock(bus["expected"]),
+             "scheduled": journeys.clock(bus["scheduled"]), "minutes_late": bus["minutes_late"],
+             "live": bus["live"]} for bus in found["buses"]]})
 
     # The next trains for the saved trip (Datebook's, else train_from and train_to in config.yaml) or the stations
     # asked about, from NJ Transit's live board

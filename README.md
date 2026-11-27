@@ -200,6 +200,7 @@ John is Nestor's voice assistant. Call him in any of these ways, and he answers 
 - "Turn the volume down to 30", "What were the last alerts?", "Remember my locker code is 4412"
 - "Set a timer for 10 minutes", "Wake me up at 7", "Set an alarm for 6:45 every weekday"
 - "When's the next train?" or "Next train back from New York?" (live NJ Transit)
+- "When's the next LX from College Ave?" (live Rutgers campus buses)
 - Anything else, with web search: "Who won the game last night?"
 
 John is warm and a little film-noir, keeps his answers to a sentence or two, only answers what you asked, and now
@@ -234,6 +235,15 @@ delays. Ask "the next train back" for the other way, or name any two stations. I
 account (the same one as Datebook) and keeps its sign-in token in `data/`, because NJ Transit allows only 5 new
 tokens a day. Your trip is Datebook's saved trip once Datebook is linked; until then, set `train_from` and
 `train_to` in `config.yaml` to the stations' two-letter codes, e.g. `"NB"` and `"NY"`.
+
+### Rutgers buses
+
+"When's the next LX from College Ave?" gives the next two buses from that stop with their live delays ("The LX leaves
+College Ave at 2:16, two minutes late, then another at 2:22"). Name any stop in your own words, and a route or where
+you're going if you like. Trips John plans by transit ("show me the journey to Tillett Hall") swap a walk for a campus
+bus when the bus lets you leave later or get there sooner, with stops up to a 15-minute walk away; "by bus" always takes
+one. The timetable comes from Rutgers' own TripShot feed (no account), downloaded into `data/rutgers-buses/` and
+fetched again weekly; live times come from the same feed.
 
 **How it works:**
 - **Hearing his name:** whenever a speech detector ([Silero](https://github.com/snakers4/silero-vad), via

@@ -1,19 +1,21 @@
 # Journeys for John: the whole trip to a place, step by step, from Google's Routes API (walks, each train or bus with
 # its line, stops and times, transfers, or a drive), planned from home with Nestor's own Google key; "drive (or walk)
-# to the station, then the train" is planned as two parts. The last journey is kept, so John can answer follow-ups,
-# the wall can show it, and "make it a plan" can send it to Datebook.
+# to the station, then the train" is planned as two parts. By transit, a walk becomes a Rutgers campus bus when one
+# helps (always, by bus). The last journey is kept, so John can answer follow-ups, the wall can show it, and "make it a
+# plan" can send it to Datebook.
 import datetime
 import json
 import logging
 import urllib.request
+from nestor import campus_buses
 from nestor import weather
 from nestor.config import load_secrets
 ROUTES_URL = "https://routes.googleapis.com/directions/v2:computeRoutes"
 PLACES_URL = "https://places.googleapis.com/v1/places:searchText"
 ROUTE_FIELDS = ("routes.duration,routes.legs.steps.travelMode,routes.legs.steps.staticDuration,"
-                "routes.legs.steps.transitDetails")
+                "routes.legs.steps.transitDetails,routes.legs.steps.startLocation,routes.legs.steps.endLocation")
 PLACE_FIELDS = "places.displayName,places.formattedAddress"
-MODES = {"transit": "TRANSIT", "walk": "WALK", "drive": "DRIVE"}
+MODES = {"transit": "TRANSIT", "bus": "TRANSIT", "walk": "WALK", "drive": "DRIVE"}  # bus: a Rutgers campus bus
 ONLY = {"train": "TRAIN", "bus": "BUS"}
 STATION_SPARE_MINUTES = 5  # Between getting to the station and the train leaving, in a two-part journey
 NEAR_KM = 60  # Places are looked for around home first
@@ -123,9 +125,15 @@ def local_time(text):
         return None
 
 # One step of a journey: its kind (walk, train, bus, subway, drive or arrive), what it is, a line under it, the
-# line's short name and colour, and when it starts and ends
-def journey_step(kind, title, under, starts, ends, line="", color=""):
-    return {"kind": kind, "title": title, "under": under, "line": line, "color": color, "starts": starts, "ends": ends}
+# line's short name and colour, when it starts and ends, and where (latitude, longitude; None when not known)
+def journey_step(kind, title, under, starts, ends, line="", color="", start=None, end=None):
+    return {"kind": kind, "title": title, "under": under, "line": line, "color": color, "starts": starts, "ends": ends,
+            "from_spot": start, "to_spot": end}
+
+# A spot from Google ({"latLng": {"latitude": .., "longitude": ..}}) as (latitude, longitude), or None
+def spot_of(location):
+    lat_lng = (location or {}).get("latLng") or {}
+    return (lat_lng["latitude"], lat_lng["longitude"]) if "latitude" in lat_lng and "longitude" in lat_lng else None
 
 # Read Google's route into steps toward a place: walks (and drives) joined, each ride with its line, headsign, stops
 # and times, walks before and between rides ending when the next ride leaves; a route with no rides is timed from
@@ -137,14 +145,17 @@ def steps_of(found, place_name, mode, leave_at, arrive_by):
     for step in (leg_step for leg in found.get("legs") or [] for leg_step in leg.get("steps") or []):
         step_mode = step.get("travelMode", "")
         length = seconds(step.get("staticDuration", "0s"))
+        start, end = spot_of(step.get("startLocation")), spot_of(step.get("endLocation"))
 
         # A ride stands alone; a walk or drive joins the one before it
         if step_mode == "TRANSIT":
-            pieces.append({"mode": step_mode, "seconds": length, "ride": step.get("transitDetails") or {}})
+            pieces.append({"mode": step_mode, "seconds": length, "ride": step.get("transitDetails") or {},
+                           "start": start, "end": end})
         elif pieces and pieces[-1]["mode"] == step_mode:
             pieces[-1]["seconds"] += length
+            pieces[-1]["end"] = end
         else:
-            pieces.append({"mode": step_mode, "seconds": length, "ride": None})
+            pieces.append({"mode": step_mode, "seconds": length, "ride": None, "start": start, "end": end})
     rides = [index for index, piece in enumerate(pieces) if piece["ride"] is not None]
     total = seconds(found.get("duration", "0s"))
 
@@ -154,8 +165,9 @@ def steps_of(found, place_name, mode, leave_at, arrive_by):
         arrive = leave + datetime.timedelta(seconds=total)
         minutes = round(total / 60)
         kind = "drive" if mode == "DRIVE" else "walk"
-        return [journey_step(kind, f"Leave · {minutes} min {kind}", f"to {place_name}", leave, arrive),
-                journey_step("arrive", f"Arrive · {place_name}", "", arrive, arrive)]
+        start, end = (pieces[0]["start"], pieces[-1]["end"]) if pieces else (None, None)
+        return [journey_step(kind, f"Leave · {minutes} min {kind}", f"to {place_name}", leave, arrive, start=start,
+                             end=end), journey_step("arrive", f"Arrive · {place_name}", "", arrive, arrive)]
     at = local_time(pieces[rides[0]]["ride"].get("stopDetails", {}).get("departureTime"))
     steps = []
 
@@ -171,7 +183,7 @@ def steps_of(found, place_name, mode, leave_at, arrive_by):
             starts = at - datetime.timedelta(seconds=piece["seconds"]) if index < rides[0] else at
             ends = starts + datetime.timedelta(seconds=piece["seconds"])
             steps.append(journey_step("walk", f"Leave · {minutes} min walk" if index == 0 else f"{minutes} min walk",
-                                      f"to {toward}", starts, ends))
+                                      f"to {toward}", starts, ends, start=piece["start"], end=piece["end"]))
             at = max(at, ends)
         else:
             stops = ride.get("stopDetails") or {}
@@ -196,7 +208,9 @@ def steps_of(found, place_name, mode, leave_at, arrive_by):
                                                  f"{count} stops" if count else "",
                                                  f"from {stops.get('departureStop', {}).get('name', '')}",
                                                  f"off at {stops.get('arrivalStop', {}).get('name', '')}") if part)
-            steps.append(journey_step(kind, name + headsign, under, departs, arrives, short, line.get("color", "")))
+            steps.append(journey_step(kind, name + headsign, under, departs, arrives, short, line.get("color", ""),
+                                      spot_of(stops.get("departureStop", {}).get("location")),
+                                      spot_of(stops.get("arrivalStop", {}).get("location"))))
             at = arrives
     steps.append(journey_step("arrive", f"Arrive · {place_name}", "", steps[-1]["ends"], steps[-1]["ends"]))
     return steps
@@ -235,6 +249,13 @@ def plan(settings, to, mode="transit", only="", leave_at=None, arrive_by=None, f
     else:
         steps = steps_of(route(key, origin, destination, google_mode, leave_at, arrive_by, only), place["name"],
                          google_mode, leave_at, arrive_by)
+
+    # By transit or bus, a walk can become a campus bus (a bus problem keeps Google's journey)
+    if mode in ("transit", "bus"):
+        try:
+            steps = campus_buses.with_live(campus_buses.with_campus_buses(steps, forced=mode == "bus"))
+        except (KeyError, ValueError, TypeError, OSError) as error:
+            log.warning("Campus buses skipped: %s", error)
     leave, arrive = steps[0]["starts"], steps[-1]["ends"]
     last = {"to": to, "name": place["name"], "address": place["address"], "mode": mode, "only": only,
             "first_by": first_by, "station": station, "asked": asked or f"How do I get to {place['name']}?",
@@ -279,6 +300,6 @@ def as_plan(title=""):
     # Nothing planned, nothing to save
     if not last:
         raise ValueError("there's no journey to make a plan of; plan one first")
-    mode = {"transit": "TRANSIT", "walk": "WALK", "drive": "DRIVE"}.get(last["mode"], "TRANSIT")
+    mode = {"transit": "TRANSIT", "bus": "BUS", "walk": "WALK", "drive": "DRIVE"}.get(last["mode"], "TRANSIT")
     return {"title": title or last["name"], "start": last["arrive"].strftime("%Y-%m-%dT%H:%M"),
             "place": last["address"], "mode": mode}
